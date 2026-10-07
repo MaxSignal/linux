@@ -20,6 +20,7 @@
 	};
 
 	bootrom: bootrom@0 {
+		compatible = "ti,nspire-bootrom";
 		reg = <0x00000000 0x80000>;
 	};
 
@@ -115,6 +116,7 @@
 		};
 
 		adc: adc@c4000000 {
+			compatible = "ti,nspire-adc";
 			reg = <0xc4000000 0x1000>;
 			interrupts = <11>;
 		};
@@ -175,10 +177,10 @@
 				interrupts = <3>;
 				clocks = <&apb_pclk>, <&apb_pclk>;
 				clock-names = "wdog_clk", "apb_pclk";
-				status = "disabled";
 			};
 
 			rtc: rtc@90090000 {
+				compatible = "ti,nspire-rtc";
 				reg = <0x90090000 0x1000>;
 				interrupts = <4>;
 			};
@@ -195,8 +197,13 @@
 			};
 
 			pwr: pwr@900b0000 {
+				compatible = "ti,nspire-pwr", "syscon", "simple-mfd";
 				reg = <0x900b0000 0x1000>;
-				interrupts = <15>;
+
+				power-button {
+					compatible = "ti,nspire-power-button";
+					interrupts = <15>;
+				};
 			};
 
 			keypad: input@900e0000 {
