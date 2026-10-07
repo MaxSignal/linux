@@ -18,6 +18,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/pm_wakeirq.h>
 #include <linux/rtc.h>
 #include <linux/spinlock.h>
 
@@ -200,6 +201,11 @@ static int nspire_rtc_probe(struct platform_device *pdev)
 				       dev_name(dev), priv);
 		if (ret)
 			return dev_err_probe(dev, ret, "failed to request IRQ\n");
+
+		device_init_wakeup(dev, true);
+		ret = devm_pm_set_wake_irq(dev, irq);
+		if (ret)
+			return ret;
 	} else {
 		dev_info(dev, "no IRQ, alarms disabled\n");
 		clear_bit(RTC_FEATURE_ALARM, priv->rtc->features);
