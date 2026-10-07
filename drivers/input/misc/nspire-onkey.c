@@ -18,6 +18,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pm_wakeirq.h>
 #include <linux/regmap.h>
 #include <linux/workqueue.h>
 
@@ -149,6 +150,12 @@ static int nspire_onkey_probe(struct platform_device *pdev)
 			       onkey);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to request IRQ\n");
+
+	/* Pressing ON wakes the system up */
+	device_init_wakeup(dev, true);
+	ret = devm_pm_set_wake_irq(dev, irq);
+	if (ret)
+		return ret;
 
 	return regmap_write(onkey->regmap, NSPIRE_PWR_ON_INT_ENABLE,
 			    NSPIRE_PWR_INT_ON);
