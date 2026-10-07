@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/leds/ti,nspire-led.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: TI-Nspire status LED
+
+maintainers:
+  - Krzysztof Kozlowski <krzk@kernel.org>
+
+description:
+  A green and a red LED (yellow when both are on) next to the keypad of
+  TI-Nspire calculators.
+
+properties:
+  compatible:
+    const: ti,nspire-led
+
+  reg:
+    maxItems: 1
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 0
+
+patternProperties:
+  "^led@[01]$":
+    type: object
+    $ref: common.yaml#
+    unevaluatedProperties: false
+    description: Green LED (0) or red LED (1)
+
+    properties:
+      reg:
+        enum: [0, 1]
+
+    required:
+      - reg
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/leds/common.h>
+
+    led-controller@90110000 {
+        compatible = "ti,nspire-led";
+        reg = <0x90110000 0x1000>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        led@0 {
+            reg = <0>;
+            color = <LED_COLOR_ID_GREEN>;
+            function = LED_FUNCTION_STATUS;
+        };
+
+        led@1 {
+            reg = <1>;
+            color = <LED_COLOR_ID_RED>;
+            function = LED_FUNCTION_STATUS;
+        };
+    };
