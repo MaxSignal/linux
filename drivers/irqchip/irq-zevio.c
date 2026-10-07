@@ -106,6 +106,11 @@ static int __init zevio_of_init(struct device_node *node,
 	gc->chip_types[0].chip.irq_ack		= zevio_irq_ack;
 	gc->chip_types[0].chip.irq_mask		= irq_gc_mask_disable_reg;
 	gc->chip_types[0].chip.irq_unmask	= irq_gc_unmask_enable_reg;
+	/*
+	 * Nothing to configure for wakeup: any unmasked interrupt gets the
+	 * CPU out of wait-for-interrupt, which is all suspend-to-idle needs.
+	 */
+	gc->chip_types[0].chip.flags		= IRQCHIP_SKIP_SET_WAKE;
 	gc->chip_types[0].regs.mask		= IO_IRQ_BASE + IO_ENABLE;
 	gc->chip_types[0].regs.enable		= IO_IRQ_BASE + IO_ENABLE;
 	gc->chip_types[0].regs.disable		= IO_IRQ_BASE + IO_DISABLE;
