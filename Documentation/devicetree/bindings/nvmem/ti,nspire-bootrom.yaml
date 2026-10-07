@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/nvmem/ti,nspire-bootrom.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: TI-Nspire boot1 mask ROM
+
+maintainers:
+  - Krzysztof Kozlowski <krzk@kernel.org>
+
+description:
+  The 512 KiB mask ROM holding the first stage boot loader (boot1) of
+  TI-Nspire calculators, exposed read-only.
+
+allOf:
+  - $ref: nvmem.yaml#
+
+properties:
+  compatible:
+    const: ti,nspire-bootrom
+
+  reg:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    bootrom@0 {
+        compatible = "ti,nspire-bootrom";
+        reg = <0x00000000 0x80000>;
+    };
