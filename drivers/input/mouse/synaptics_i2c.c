@@ -78,6 +78,7 @@
 #define ABS_LSB_Y_REG		(ABS_MSB_Y_REG + 1)
 #define REL_X_REG		0x0406
 #define REL_Y_REG		0x0407
+#define CLICKPAD_DOWN_REG	0x040A
 
 #define DEV_QUERY_REG0		0x1000
 #define DEV_QUERY_REG1		(DEV_QUERY_REG0 + 1)
@@ -114,6 +115,9 @@
 /* Device Command Register Bits (DEV_COMMAND_REG) */
 #define RESET_COMMAND		0x01
 #define REZERO_COMMAND		0x02
+
+/* Product number (INFO_QUERY_REG1) of the TI-Nspire touchpad */
+#define TI_NSPIRE_PRODUCT	0x06
 
 /* Data Register 0 Bits (DATA_REG0) */
 #define GESTURE			3
@@ -189,6 +193,11 @@ static bool no_decel = true;
 module_param(no_decel, bool, 0644);
 MODULE_PARM_DESC(no_decel, "No Deceleration. Default = 1 (on)");
 
+/* Report pressing down the pad itself (TI-Nspire touchpad) as a click */
+static int clickpad = 2;
+module_param(clickpad, int, 0644);
+MODULE_PARM_DESC(clickpad, "Report clickpad presses. 0 = off, 1 = on, 2 = auto (default)");
+
 /* Control touchpad's Reduced Reporting option */
 static bool reduce_report;
 module_param(reduce_report, bool, 0644);
@@ -225,6 +234,7 @@ struct synaptics_i2c {
 	int			no_filter_param;
 	int			scan_rate_param;
 	int			scan_ms;
+	int			product;
 };
 
 static inline void set_scan_rate(struct synaptics_i2c *touch, int scan_rate)
@@ -351,13 +361,24 @@ static bool synaptics_i2c_get_input(struct synaptics_i2c *touch)
 	s32 data;
 	s8 x_delta, y_delta;
 
-	/* Deal with spontaneous resets and errors */
-	if (synaptics_i2c_check_error(touch->client))
+	/*
+	 * Deal with spontaneous resets and errors. The TI-Nspire touchpad's
+	 * status register does not follow this scheme, so skip it there.
+	 */
+	if (touch->product != TI_NSPIRE_PRODUCT &&
+	    synaptics_i2c_check_error(touch->client))
 		return false;
 
 	/* Get Gesture Bit */
 	data = synaptics_i2c_reg_get(touch->client, DATA_REG0);
 	gesture = (data >> GESTURE) & 0x1;
+
+	if (clickpad == 1 ||
+	    (clickpad == 2 && touch->product == TI_NSPIRE_PRODUCT)) {
+		data = synaptics_i2c_reg_get(touch->client, CLICKPAD_DOWN_REG);
+		if (data > 0)
+			gesture |= data & 0x1;
+	}
 
 	/*
 	 * Get Relative axes. we have to get them in one shot,
@@ -533,6 +554,8 @@ static int synaptics_i2c_probe(struct i2c_client *client)
 	if (error)
 		return error;
 
+	touch->product = synaptics_i2c_reg_get(client, INFO_QUERY_REG1);
+
 	if (client->irq <= 0)
 		polling_req = true;
 
@@ -603,6 +626,24 @@ static int synaptics_i2c_resume(struct device *dev)
 	return 0;
 }
 
+/*
+ * Leave the touchpad in its power-on state for whatever runs next, e.g. the
+ * TI-Nspire OS after a reboot.
+ */
+static void synaptics_i2c_shutdown(struct i2c_client *client)
+{
+	struct synaptics_i2c *touch = i2c_get_clientdata(client);
+
+	if (!touch)
+		return;
+
+	if (!polling_req)
+		disable_irq(client->irq);
+	cancel_delayed_work_sync(&touch->dwork);
+	synaptics_i2c_reg_set(client, INTERRUPT_EN_REG, 0);
+	synaptics_i2c_reg_set(client, DEV_COMMAND_REG, RESET_COMMAND);
+}
+
 static DEFINE_SIMPLE_DEV_PM_OPS(synaptics_i2c_pm, synaptics_i2c_suspend,
 				synaptics_i2c_resume);
 
@@ -628,6 +669,7 @@ static struct i2c_driver synaptics_i2c_driver = {
 	},
 
 	.probe		= synaptics_i2c_probe,
+	.shutdown	= synaptics_i2c_shutdown,
 	.id_table	= synaptics_i2c_id_table,
 };
 
