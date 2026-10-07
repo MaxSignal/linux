@@ -573,6 +573,12 @@ static int nspire_nand_probe(struct platform_device *pdev)
 
 	/* Partial page programming is not worth the risk on this flash */
 	nand->chip.options |= NAND_NO_SUBPAGE_WRITE;
+	/*
+	 * The TI-Nspire OS tracks bad blocks itself, and its filesystem
+	 * layer (FlashFX) keeps its own data where the bad block marker
+	 * would be, so the markers mean nothing here: no bad block table.
+	 */
+	nand->chip.options |= NAND_SKIP_BBTSCAN | NAND_NO_BBM_QUIRK;
 
 	mtd = nand_to_mtd(&nand->chip);
 	mtd->dev.parent = dev;
