@@ -408,6 +408,17 @@ config MTD_NAND_ROCKCHIP
 	    NFC v800: RK3308, RV1108
 	    NFC v900: PX30, RK3326
 
+config MTD_NAND_NSPIRE
+	tristate "TI-Nspire NAND controllers"
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	depends on HAS_IOMEM && HAS_DMA
+	help
+	  Enables support for the NAND flash of TI-Nspire calculators, both
+	  the PL351 based controller of the CX models and the controller of
+	  the classic models. The ECC layout of the TI-Nspire OS is used, so
+	  its partitions can be read (and, if the device tree allows it,
+	  written).
+
 config MTD_NAND_PL35X
 	tristate "ARM PL35X NAND controller"
 	depends on OF
