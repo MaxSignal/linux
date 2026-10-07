@@ -331,23 +331,13 @@ static void vic_unmask_irq(struct irq_data *d)
 }
 
 #if defined(CONFIG_PM)
-static struct vic_device *vic_from_irq(unsigned int irq)
-{
-        struct vic_device *v = vic_devices;
-	unsigned int base_irq = irq & ~31;
-	int id;
-
-	for (id = 0; id < vic_id; id++, v++) {
-		if (v->irq == base_irq)
-			return v;
-	}
-
-	return NULL;
-}
-
 static int vic_set_wake(struct irq_data *d, unsigned int on)
 {
-	struct vic_device *v = vic_from_irq(d->irq);
+	/*
+	 * Not looked up from the Linux IRQ number: with a device tree, the
+	 * numbers a VIC gets need not start at a multiple of 32.
+	 */
+	struct vic_device *v = d->domain->host_data;
 	unsigned int off = d->hwirq;
 	u32 bit = 1 << off;
 
