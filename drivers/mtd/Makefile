@@ -32,3 +32,4 @@ obj-y		+= chips/ lpddr/ maps/ devices/ nand/ tests/
 obj-$(CONFIG_MTD_SPI_NOR)	+= spi-nor/
 obj-$(CONFIG_MTD_UBI)		+= ubi/
 obj-$(CONFIG_MTD_HYPERBUS)	+= hyperbus/
+obj-$(CONFIG_MTD_NSPIRE_TIFS)	+= nspire-tifs.o
