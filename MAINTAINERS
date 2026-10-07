@@ -3804,8 +3804,11 @@ F:	Documentation/devicetree/bindings/arm/ti/nspire.yaml
 F:	arch/arm/boot/dts/nspire/
 F:	arch/arm/configs/nspire.config
 F:	drivers/cpufreq/nspire-cpufreq.c
+F:	drivers/crypto/nspire-crypto.c
 F:	drivers/iio/adc/nspire-adc.c
 F:	drivers/input/misc/nspire-onkey.c
+F:	drivers/leds/leds-nspire.c
+F:	drivers/mtd/nand/raw/nspire-nand.c
 F:	drivers/nvmem/nspire-bootrom.c
 F:	drivers/rtc/rtc-nspire.c
 F:	drivers/video/backlight/nspire_bl.c
