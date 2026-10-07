@@ -3802,6 +3802,13 @@ F:	Documentation/devicetree/bindings/*/*/ti,nspire*
 F:	Documentation/devicetree/bindings/*/ti,nspire*
 F:	Documentation/devicetree/bindings/arm/ti/nspire.yaml
 F:	arch/arm/boot/dts/nspire/
+F:	arch/arm/configs/nspire.config
+F:	drivers/cpufreq/nspire-cpufreq.c
+F:	drivers/iio/adc/nspire-adc.c
+F:	drivers/input/misc/nspire-onkey.c
+F:	drivers/nvmem/nspire-bootrom.c
+F:	drivers/rtc/rtc-nspire.c
+F:	drivers/video/backlight/nspire_bl.c
 
 ARM/TOSHIBA VISCONTI ARCHITECTURE
 M:	Nobuhiro Iwamatsu <nobuhiro.iwamatsu.x90@mail.toshiba>
