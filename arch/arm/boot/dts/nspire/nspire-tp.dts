@@ -5,6 +5,7 @@
 
 /dts-v1/;
 
+#include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
 
 /include/ "nspire-classic.dtsi"
@@ -82,4 +83,20 @@
 / {
 	model = "TI-NSPIRE Touchpad";
 	compatible = "ti,nspire-tp";
+
+	/* The touchpad is bit-banged through the GPIO block. */
+	i2c {
+		compatible = "i2c-gpio";
+		sda-gpios = <&gpio 3 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		scl-gpios = <&gpio 1 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		i2c-gpio,delay-us = <1>;
+		i2c-gpio,timeout-ms = <1000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		touchpad@20 {
+			compatible = "synaptics,synaptics_i2c";
+			reg = <0x20>;
+		};
+	};
 };

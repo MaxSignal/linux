@@ -41,6 +41,10 @@
 
 };
 
+&contrast {
+	compatible = "ti,nspire-classic-contrast";
+};
+
 &base_clk {
 	compatible = "lsi,nspire-classic-clock";
 };

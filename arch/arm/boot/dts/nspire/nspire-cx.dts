@@ -118,6 +118,10 @@
 	gpio = <&gpio 2 0>;
 };
 
+&contrast {
+	compatible = "ti,nspire-cx-backlight";
+};
+
 / {
 	model = "TI-NSPIRE CX";
 	compatible = "ti,nspire-cx";
@@ -152,12 +156,22 @@
 				compatible = "snps,designware-i2c";
 				reg = <0x90050000 0x1000>;
 				interrupts = <20>;
+				clocks = <&apb_pclk>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				touchpad@20 {
+					compatible = "synaptics,synaptics_i2c";
+					reg = <0x20>;
+				};
 			};
 		};
 	};
 
 	panel {
 		compatible = "ti,nspire-cx-lcd-panel";
+		backlight = <&contrast>;
+
 		port {
 			panel_in: endpoint {
 				remote-endpoint = <&clcd_pads>;
