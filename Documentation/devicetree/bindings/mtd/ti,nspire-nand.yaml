@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mtd/ti,nspire-nand.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: TI-Nspire NAND flash controllers
+
+maintainers:
+  - Krzysztof Kozlowski <krzk@kernel.org>
+
+description: |
+  The CX models use an ARM PL351 static memory controller: its configuration
+  registers, and a window whose address bits encode NAND commands, address
+  cycle counts and data phases. The classic models use a controller that runs
+  a whole command/address/data sequence and moves the data by DMA.
+
+  Both are driven with the ECC layout of the TI-Nspire OS.
+
+allOf:
+  - $ref: nand-controller.yaml
+
+properties:
+  compatible:
+    enum:
+      - ti,nspire-classic-nand
+      - ti,nspire-cx-nand
+
+  reg:
+    minItems: 1
+    items:
+      - description: controller registers
+      - description: command/data window (CX)
+
+  reg-names:
+    items:
+      - const: regs
+      - const: data
+
+required:
+  - compatible
+  - reg
+
+if:
+  properties:
+    compatible:
+      const: ti,nspire-cx-nand
+then:
+  properties:
+    reg:
+      minItems: 2
+  required:
+    - reg-names
+else:
+  properties:
+    reg:
+      maxItems: 1
+    reg-names: false
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    nand-controller@8fff1000 {
+        compatible = "ti,nspire-cx-nand";
+        reg = <0x8fff1000 0x1000>, <0x81000000 0x1000000>;
+        reg-names = "regs", "data";
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        nand@0 {
+            reg = <0>;
+
+            partitions {
+                compatible = "fixed-partitions";
+                #address-cells = <1>;
+                #size-cells = <1>;
+
+                partition@0 {
+                    label = "manuf";
+                    reg = <0x0 0x20000>;
+                    read-only;
+                };
+            };
+        };
+    };
