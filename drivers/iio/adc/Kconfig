@@ -1277,6 +1277,18 @@ config NPCM_ADC
 	  This driver can also be built as a module. If so, the module
 	  will be called npcm_adc.
 
+config NSPIRE_ADC
+	tristate "TI-Nspire ADC"
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	depends on HAS_IOMEM
+	help
+	  Say yes here to build support for the analog-to-digital converter
+	  found in TI-Nspire calculators. It is used to monitor the battery
+	  voltages and to detect which keypad is attached.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called nspire-adc.
+
 config NXP_SAR_ADC
 	tristate "NXP S32G SAR-ADC driver"
 	depends on ARCH_S32 || COMPILE_TEST
