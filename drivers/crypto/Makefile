@@ -18,6 +18,7 @@ obj-$(CONFIG_CRYPTO_DEV_IMGTEC_HASH) += img-hash.o
 obj-$(CONFIG_CRYPTO_DEV_MARVELL) += marvell/
 obj-$(CONFIG_CRYPTO_DEV_MXS_DCP) += mxs-dcp.o
 obj-$(CONFIG_CRYPTO_DEV_NX) += nx/
+obj-$(CONFIG_CRYPTO_DEV_NSPIRE) += nspire-crypto.o
 obj-$(CONFIG_CRYPTO_DEV_OMAP) += omap-crypto.o
 obj-$(CONFIG_CRYPTO_DEV_OMAP_AES) += omap-aes-driver.o
 omap-aes-driver-objs := omap-aes.o omap-aes-gcm.o
