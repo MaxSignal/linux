@@ -3,7 +3,7 @@
  * TI-Nspire boot1 ROM reader
  *
  * Exposes the 512 KiB mask ROM at physical address 0 (boot1) read-only
- * through nvmem, e.g. /sys/bus/nvmem/devices/nspire-bootrom0/nvmem.
+ * through nvmem, as /sys/bus/nvmem/devices/nspire-bootrom/nvmem.
  *
  * Copyright (C) 2012 Daniel Tang <tangrs@tangrs.id.au>
  * Ported from /proc/boot1_rom of the legacy arch/arm/mach-nspire kernel.
@@ -37,7 +37,7 @@ static int nspire_bootrom_probe(struct platform_device *pdev)
 		return PTR_ERR(base);
 
 	config.name = "nspire-bootrom";
-	config.id = NVMEM_DEVID_AUTO;
+	config.id = NVMEM_DEVID_NONE;
 	config.dev = dev;
 	config.owner = THIS_MODULE;
 	config.read_only = true;
