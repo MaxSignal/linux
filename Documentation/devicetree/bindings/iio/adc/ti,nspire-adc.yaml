@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/iio/adc/ti,nspire-adc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: TI-Nspire analog-to-digital converter
+
+maintainers:
+  - Krzysztof Kozlowski <krzk@kernel.org>
+
+description:
+  Seven channel ADC found in TI-Nspire calculators. Channels 1 (VBATT),
+  2 (VSYS) and 4 (B12) monitor the batteries and channel 3 identifies the
+  attached keypad.
+
+properties:
+  compatible:
+    const: ti,nspire-adc
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  "#io-channel-cells":
+    const: 1
+
+required:
+  - compatible
+  - reg
+  - interrupts
+
+additionalProperties: false
+
+examples:
+  - |
+    adc@c4000000 {
+        compatible = "ti,nspire-adc";
+        reg = <0xc4000000 0x1000>;
+        interrupts = <11>;
+    };
