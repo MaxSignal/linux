@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/rtc/ti,nspire-rtc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: TI-Nspire Real Time Clock
+
+maintainers:
+  - Krzysztof Kozlowski <krzk@kernel.org>
+
+description:
+  Seconds counter with a single alarm found in TI-Nspire calculators. It
+  resembles an ARM PL031 (and reports its PrimeCell ID) but its interrupt
+  registers are laid out differently, so it is not an arm,pl031.
+
+allOf:
+  - $ref: rtc.yaml#
+
+properties:
+  compatible:
+    const: ti,nspire-rtc
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    rtc@90090000 {
+        compatible = "ti,nspire-rtc";
+        reg = <0x90090000 0x1000>;
+        interrupts = <4>;
+    };
