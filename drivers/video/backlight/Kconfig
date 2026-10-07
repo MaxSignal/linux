@@ -226,6 +226,18 @@ config BACKLIGHT_LOCOMO
 	  If you have a Sharp Zaurus SL-5500 (Collie) or SL-5600 (Poodle) say y to
 	  enable the LCD/backlight driver.
 
+config BACKLIGHT_NSPIRE
+	tristate "TI-Nspire LCD backlight/contrast"
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	help
+	  Say Y here to control the LCD backlight of TI-Nspire CX
+	  calculators, or the LCD contrast of the grayscale classic models
+	  (Clickpad and Touchpad), through the backlight class. Both are set
+	  through the same register of the HDQ/1-Wire block.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called nspire_bl.
+
 config BACKLIGHT_OMAP1
 	tristate "OMAP1 PWL-based LCD Backlight"
 	depends on ARCH_OMAP1 || COMPILE_TEST
