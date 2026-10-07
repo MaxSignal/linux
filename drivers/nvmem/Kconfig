@@ -362,6 +362,18 @@ config NVMEM_S32G_OCOTP
 	  If you say Y here, you will get support for the One Time
 	  Programmable memory pages.
 
+config NVMEM_NSPIRE_BOOTROM
+	tristate "TI-Nspire boot1 ROM"
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	depends on HAS_IOMEM
+	help
+	  Say Y here to make the boot1 mask ROM of TI-Nspire calculators
+	  readable (by root) through the nvmem sysfs interface, for example
+	  to dump it for use with an emulator.
+
+	  This driver can also be built as a module. If so, the module
+	  will be called nvmem-nspire-bootrom.
+
 config NVMEM_QCOM_QFPROM
 	tristate "Qualcomm QFPROM Support"
 	depends on ARCH_QCOM || COMPILE_TEST
