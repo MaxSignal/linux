@@ -616,6 +616,17 @@ config HP_SDC_RTC
 	  Say Y here if you want to support the built-in real time clock
 	  of the HP SDC controller.
 
+config INPUT_NSPIRE_ONKEY
+	tristate "TI-Nspire ON key"
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	depends on MFD_SYSCON
+	help
+	  Say Y here to report the ON key of TI-Nspire calculators as
+	  KEY_POWER input events.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called nspire-onkey.
+
 config INPUT_PALMAS_PWRBUTTON
 	tristate "Palmas Power button Driver"
 	depends on MFD_PALMAS
