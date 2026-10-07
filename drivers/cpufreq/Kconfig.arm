@@ -266,6 +266,18 @@ config ARM_TI_CPUFREQ
 	  data provided. Required for cpufreq support on AM335x, AM437x,
 	  DRA7x, and AM57x platforms.
 
+config ARM_NSPIRE_CPUFREQ
+	tristate "TI-Nspire CPU frequency scaling"
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	depends on MFD_SYSCON && OF
+	help
+	  This adds the CPUFreq driver for TI-Nspire calculators. It
+	  scales the CPU clock between the setting chosen by the boot
+	  environment and lower frequencies, without touching the bus
+	  clocks used by the peripherals.
+
+	  If in doubt, say N.
+
 config ARM_PXA2xx_CPUFREQ
 	tristate "Intel PXA2xx CPUfreq driver"
 	depends on PXA27x || PXA25x || COMPILE_TEST
