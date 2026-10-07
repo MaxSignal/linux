@@ -3768,6 +3768,7 @@ F:	drivers/iio/adc/nspire-adc.c
 F:	drivers/input/misc/nspire-onkey.c
 F:	drivers/leds/leds-nspire.c
 F:	drivers/mtd/nand/raw/nspire-nand.c
+F:	drivers/mtd/nspire-tifs.c
 F:	drivers/nvmem/nspire-bootrom.c
 F:	drivers/rtc/rtc-nspire.c
 F:	drivers/video/backlight/nspire_bl.c

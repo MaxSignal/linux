@@ -215,6 +215,19 @@ config MTD_VIRT_CONCAT
 	  entity. This allows for the creation of partitions larger than
 	  the individual physical chips, extending across chip boundaries.
 
+config MTD_NSPIRE_TIFS
+	tristate "TI-Nspire: block device on a file of the TI-Nspire OS filesystem"
+	depends on BLOCK && MTD_NAND_ECC_SW_HAMMING
+	select CRC32
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	help
+	  Exposes a preallocated file of the TI-Nspire OS filesystem (FlashFX
+	  Pro + Reliance, in the "filesystem" NAND partition) as /dev/tifs0,
+	  for example the Linux root filesystem image created by linuxloader2.
+	  The file's contents are rewritten the way FlashFX does it; the
+	  filesystem metadata is never modified. Writing is only enabled when
+	  the on-flash formats match what the driver knows.
+
 source "drivers/mtd/chips/Kconfig"
 
 source "drivers/mtd/maps/Kconfig"
