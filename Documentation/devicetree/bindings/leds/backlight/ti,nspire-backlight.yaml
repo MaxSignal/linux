@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/leds/backlight/ti,nspire-backlight.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: TI-Nspire LCD backlight / contrast control
+
+maintainers:
+  - Krzysztof Kozlowski <krzk@kernel.org>
+
+description:
+  The HDQ/1-Wire block of TI-Nspire calculators contains a register that
+  sets the LCD backlight brightness on the colour CX models and the LCD
+  contrast on the grayscale classic models.
+
+properties:
+  compatible:
+    enum:
+      - ti,nspire-classic-contrast
+      - ti,nspire-cx-backlight
+
+  reg:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    backlight@900f0000 {
+        compatible = "ti,nspire-cx-backlight";
+        reg = <0x900f0000 0x1000>;
+    };

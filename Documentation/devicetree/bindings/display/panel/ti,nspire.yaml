@@ -17,6 +17,7 @@ properties:
     enum:
       - ti,nspire-cx-lcd-panel
       - ti,nspire-classic-lcd-panel
+  backlight: true
   port: true
 
 required:
