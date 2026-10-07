@@ -122,6 +122,10 @@
 	compatible = "ti,nspire-cx-backlight";
 };
 
+&battery {
+	device-chemistry = "lithium-ion";
+};
+
 / {
 	model = "TI-NSPIRE CX";
 	compatible = "ti,nspire-cx";
@@ -146,6 +150,57 @@
 			interrupt-controller;
 			reg = <0xdc000000 0x1000>;
 			#interrupt-cells = <1>;
+			/* RTC alarm and ON key */
+			valid-wakeup-mask = <0x00008010>;
+		};
+
+		/* Partitions as laid out by the TI-Nspire OS */
+		nand-controller@8fff1000 {
+			compatible = "ti,nspire-cx-nand";
+			reg = <0x8fff1000 0x1000>, <0x81000000 0x1000000>;
+			reg-names = "regs", "data";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			nand@0 {
+				reg = <0>;
+
+				partitions {
+					compatible = "fixed-partitions";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					partition@0 {
+						label = "manuf";
+						reg = <0x0 0x20000>;
+						read-only;
+					};
+
+					partition@20000 {
+						label = "boot2";
+						reg = <0x20000 0x2a0000>;
+						read-only;
+					};
+
+					partition@2c0000 {
+						label = "bootdata";
+						reg = <0x2c0000 0x60000>;
+						read-only;
+					};
+
+					partition@320000 {
+						label = "diags";
+						reg = <0x320000 0xe0000>;
+						read-only;
+					};
+
+					partition@400000 {
+						label = "filesystem";
+						reg = <0x400000 0x7c00000>;
+						read-only;
+					};
+				};
+			};
 		};
 
 		apb@90000000 {

@@ -3,6 +3,8 @@
  *  Copyright (C) 2013 Daniel Tang <tangrs@tangrs.id.au>
  */
 
+#include <dt-bindings/leds/common.h>
+
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
@@ -59,6 +61,18 @@
 		clock-div = <2>;
 		clock-mult = <1>;
 		clocks = <&ahb_clk>;
+	};
+
+	battery: battery {
+		compatible = "simple-battery";
+	};
+
+	/* Battery voltage as measured by the ADC (VBATT) */
+	fuel-gauge {
+		compatible = "adc-battery";
+		io-channels = <&adc 1>;
+		io-channel-names = "voltage";
+		monitored-battery = <&battery>;
 	};
 
 	usb_phy: usb_phy {
@@ -119,13 +133,16 @@
 			compatible = "ti,nspire-adc";
 			reg = <0xc4000000 0x1000>;
 			interrupts = <11>;
+			#io-channel-cells = <1>;
 		};
 
 		tdes: crypto@c8010000 {
+			compatible = "ti,nspire-des";
 			reg = <0xc8010000 0x1000>;
 		};
 
 		sha256: crypto@cc000000 {
+			compatible = "ti,nspire-sha256";
 			reg = <0xcc000000 0x1000>;
 		};
 
@@ -222,7 +239,22 @@
 			};
 
 			led: led@90110000 {
+				compatible = "ti,nspire-led";
 				reg = <0x90110000 0x1000>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				led@0 {
+					reg = <0>;
+					color = <LED_COLOR_ID_GREEN>;
+					function = LED_FUNCTION_STATUS;
+				};
+
+				led@1 {
+					reg = <1>;
+					color = <LED_COLOR_ID_RED>;
+					function = LED_FUNCTION_STATUS;
+				};
 			};
 		};
 	};

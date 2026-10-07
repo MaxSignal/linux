@@ -74,6 +74,54 @@
 			reg = <0xdc000000 0x1000>;
 			#interrupt-cells = <1>;
 		};
+
+		/* Partitions as laid out by the TI-Nspire OS */
+		nand-controller@b8000000 {
+			compatible = "ti,nspire-classic-nand";
+			reg = <0xb8000000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			nand@0 {
+				reg = <0>;
+
+				partitions {
+					compatible = "fixed-partitions";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					partition@0 {
+						label = "manuf";
+						reg = <0x0 0x4000>;
+						read-only;
+					};
+
+					partition@4000 {
+						label = "boot2";
+						reg = <0x4000 0x14c000>;
+						read-only;
+					};
+
+					partition@150000 {
+						label = "bootdata";
+						reg = <0x150000 0x10000>;
+						read-only;
+					};
+
+					partition@160000 {
+						label = "diags";
+						reg = <0x160000 0xa0000>;
+						read-only;
+					};
+
+					partition@200000 {
+						label = "filesystem";
+						reg = <0x200000 0x1e00000>;
+						read-only;
+					};
+				};
+			};
+		};
 	};
 
 	panel {
