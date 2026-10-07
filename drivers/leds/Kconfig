@@ -747,6 +747,18 @@ config LEDS_MC13783
 	  This option enables support for on-chip LED drivers found
 	  on Freescale Semiconductor MC13783/MC13892/MC34708 PMIC.
 
+config LEDS_NSPIRE
+	tristate "LED support for TI-Nspire calculators"
+	depends on LEDS_CLASS
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	depends on MFD_SYSCON
+	help
+	  This option enables support for the green/red status LED of
+	  TI-Nspire calculators.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called leds-nspire.
+
 config LEDS_NS2
 	tristate "LED support for Network Space v2 GPIO LEDs"
 	depends on LEDS_CLASS
