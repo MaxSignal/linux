@@ -505,6 +505,22 @@ if CRYPTO_DEV_CCP
 	source "drivers/crypto/ccp/Kconfig"
 endif
 
+config CRYPTO_DEV_NSPIRE
+	tristate "TI-Nspire SHA-256 and DES engines"
+	depends on ARCH_NSPIRE || COMPILE_TEST
+	depends on HAS_IOMEM
+	select CRYPTO_HASH
+	select CRYPTO_SKCIPHER
+	select CRYPTO_LIB_DES
+	select CRYPTO_LIB_SHA256
+	help
+	  Say Y here to use the SHA-256 and triple DES engines of TI-Nspire
+	  calculators: "sha256" (one-shot digests run on the engine) and
+	  "ecb/cbc(des)" / "ecb/cbc(des3_ede)".
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called nspire-crypto.
+
 config CRYPTO_DEV_MXS_DCP
 	tristate "Support for Freescale MXS DCP"
 	depends on (ARCH_MXS || ARCH_MXC)
