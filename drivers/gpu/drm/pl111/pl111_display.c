@@ -15,9 +15,9 @@
 #include <linux/media-bus-format.h>
 #include <linux/of_graph.h>
 
+#include <drm/drm_color_mgmt.h>
 #include <drm/drm_fb_dma_helper.h>
 #include <drm/drm_fourcc.h>
-#include <drm/drm_color_mgmt.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_dma_helper.h>
@@ -105,7 +105,8 @@ static int pl111_display_check(struct drm_simple_display_pipe *pipe,
 		/* There's no pitch register -- the mode's hdisplay
 		 * controls it.
 		 */
-		if (fb->pitches[0] != mode->hdisplay * fb->format->cpp[0])
+		if (fb->pitches[0] !=
+		    drm_format_info_min_pitch(fb->format, 0, mode->hdisplay))
 			return -EINVAL;
 
 		/* We can't change the FB format in a flicker-free
@@ -132,7 +133,7 @@ static bool pl111_panel_is_grayscale(struct pl111_drm_dev_private *priv)
 }
 
 /*
- * Load the 256 entry palette used by DRM_FORMAT_C8 from the gamma LUT, or
+ * Load the 256 entry palette used by DRM_FORMAT_C4/C8 from the gamma LUT, or
  * a gray ramp without one. Monochrome STN panels take a 4 bit level of
  * black from bits 1-4 of the red field: colours are turned into levels of
  * black there, with the other bits clear (the TI-Nspire's panel shows full
@@ -324,6 +325,14 @@ static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 	 * the PL110 (LCDC) however uses the standard DRM format.
 	 */
 	switch (fb->format->format) {
+	case DRM_FORMAT_C4:
+		/*
+		 * The first pixel in the low nibble (no CNTL_BEPO), as the
+		 * fbdev drawing code puts it on little endian
+		 */
+		cntl |= CNTL_LCDBPP4;
+		pl111_load_palette(priv, cstate);
+		break;
 	case DRM_FORMAT_C8:
 		cntl |= CNTL_LCDBPP8;
 		pl111_load_palette(priv, cstate);
@@ -475,7 +484,7 @@ static void pl111_display_update(struct drm_simple_display_pipe *pipe,
 		writel(addr, priv->regs + CLCD_UBAS);
 	}
 
-	if (fb && fb->format->format == DRM_FORMAT_C8 &&
+	if (fb && fb->format->is_color_indexed &&
 	    crtc->state->color_mgmt_changed)
 		pl111_load_palette(priv, crtc->state);
 

@@ -116,7 +116,7 @@ struct drm_minor;
  * @formats: array of supported pixel formats on this variant
  * @nformats: the length of the array of supported pixel formats
  * @fb_depth: desired depth per pixel on the default framebuffer
- * @palette: the formats include DRM_FORMAT_C8, which uses the palette
+ * @palette: the formats include DRM_FORMAT_C4 or C8, which use the palette
  *	(loaded from the CRTC gamma LUT)
  */
 struct pl111_variant_data {
