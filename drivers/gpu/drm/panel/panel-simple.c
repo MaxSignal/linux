@@ -4991,9 +4991,11 @@ static const struct drm_display_mode ti_nspire_classic_lcd_mode[] = {
 	{
 		/*
 		 * The pixel rate of the TI-Nspire OS: 8 pixels on each
-		 * 450 kHz panel clock, about 44 frames per second
+		 * 600 kHz panel clock (the 30 MHz APB clock divided by 50),
+		 * about 58 frames per second. The gray levels of the STN
+		 * panel flicker visibly at lower rates.
 		 */
-		.clock = 3600,
+		.clock = 4800,
 		.hdisplay = 320,
 		/* As short as the controller allows, as the TI-Nspire OS does */
 		.hsync_start = 320 + 1,
