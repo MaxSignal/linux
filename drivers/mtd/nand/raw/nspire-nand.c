@@ -59,6 +59,12 @@
 #define PHX_OP_WRITE			BIT(11)
 #define PHX_OP_CMD2			GENMASK(19, 12)
 #define PHX_OP_CMD2_VALID		BIT(20)
+/*
+ * Move one byte of memory per byte of the chip; without it, the DMA writes
+ * each byte of the chip four times, and moves a quarter of the data. The
+ * TI-Nspire OS sets it.
+ */
+#define PHX_OP_DATA_BYTES		BIT(21)
 #define PHX_OP_DATA			BIT(22)
 #define PHX_ADDR(n)			(0x10 + 4 * (n))
 #define PHX_MAX_ADDRS			4
@@ -324,7 +330,7 @@ static int nspire_classic_exec(struct nand_chip *chip,
 		writel(op.addrs[i], nand->regs + PHX_ADDR(i));
 
 	if (op.data) {
-		ctrl |= PHX_OP_DATA;
+		ctrl |= PHX_OP_DATA | PHX_OP_DATA_BYTES;
 		if (op.data->type == NAND_OP_DATA_OUT_INSTR) {
 			ctrl |= PHX_OP_WRITE;
 			memcpy(nand->dma_buf,
