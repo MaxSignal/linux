@@ -133,8 +133,10 @@ static bool pl111_panel_is_grayscale(struct pl111_drm_dev_private *priv)
 
 /*
  * Load the 256 entry palette used by DRM_FORMAT_C8 from the gamma LUT, or
- * a gray ramp without one. Monochrome STN panels only use the red field:
- * colours are turned into levels of black there.
+ * a gray ramp without one. Monochrome STN panels take a 4 bit level of
+ * black from bits 1-4 of the red field: colours are turned into levels of
+ * black there, with the other bits clear (the TI-Nspire's panel shows full
+ * black flickering otherwise).
  */
 static void pl111_load_palette(struct pl111_drm_dev_private *priv,
 			       struct drm_crtc_state *cstate)
@@ -162,10 +164,10 @@ static void pl111_load_palette(struct pl111_drm_dev_private *priv,
 		if (grayscale) {
 			u32 y = (r * 77 + g * 150 + b * 29) >> 8;
 
-			r = g = b = 0xffff - y;
+			entry = ((0xffff - y) >> 12) << 1;
+		} else {
+			entry = (r >> 11) | (g >> 11) << 5 | (b >> 11) << 10;
 		}
-
-		entry = (r >> 11) | (g >> 11) << 5 | (b >> 11) << 10;
 		if (i & 1) {
 			word |= entry << 16;
 			writel(word, priv->regs + CLCD_PALETTE + (i - 1) * 2);
