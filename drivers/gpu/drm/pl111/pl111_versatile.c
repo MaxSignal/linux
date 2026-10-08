@@ -472,12 +472,55 @@ static int pl111_vexpress_clcd_init(struct drm_device *dev, struct device_node *
 	return 0;
 }
 
+/*
+ * TI-Nspire calculators: the CX has a PL111 and a colour TFT panel, which
+ * the TI-Nspire OS drives with RGB565; the classic models (Touchpad,
+ * Clickpad) have a PL110 and a 16 levels grayscale STN panel, which only
+ * works with the palette (or a peculiar 16 bpp mode).
+ */
+static const u32 pl111_nspire_cx_pixel_formats[] = {
+	DRM_FORMAT_RGB565,
+	DRM_FORMAT_BGR565,
+	DRM_FORMAT_XRGB8888,
+	DRM_FORMAT_XBGR8888,
+};
+
+static const struct pl111_variant_data pl111_nspire_cx = {
+	.name = "PL111 TI-Nspire CX",
+	.formats = pl111_nspire_cx_pixel_formats,
+	.nformats = ARRAY_SIZE(pl111_nspire_cx_pixel_formats),
+	.fb_depth = 16,
+};
+
+static const u32 pl110_nspire_classic_pixel_formats[] = {
+	DRM_FORMAT_C8,
+};
+
+static const struct pl111_variant_data pl110_nspire_classic = {
+	.name = "PL110 TI-Nspire",
+	.is_pl110 = true,
+	.formats = pl110_nspire_classic_pixel_formats,
+	.nformats = ARRAY_SIZE(pl110_nspire_classic_pixel_formats),
+	.fb_depth = 8,
+	.palette = true,
+};
+
 int pl111_versatile_init(struct drm_device *dev, struct pl111_drm_dev_private *priv)
 {
 	const struct of_device_id *clcd_id;
 	enum versatile_clcd versatile_clcd_type;
 	struct device_node *np;
 	struct regmap *map;
+
+	if (of_machine_is_compatible("ti,nspire-cx")) {
+		priv->variant = &pl111_nspire_cx;
+		return 0;
+	}
+	if (of_machine_is_compatible("ti,nspire-tp") ||
+	    of_machine_is_compatible("ti,nspire-clp")) {
+		priv->variant = &pl110_nspire_classic;
+		return 0;
+	}
 
 	np = of_find_matching_node_and_match(NULL, versatile_clcd_of_match,
 					     &clcd_id);
