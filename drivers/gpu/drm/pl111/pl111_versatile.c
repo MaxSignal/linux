@@ -493,6 +493,7 @@ static const struct pl111_variant_data pl111_nspire_cx = {
 };
 
 static const u32 pl110_nspire_classic_pixel_formats[] = {
+	DRM_FORMAT_C4,
 	DRM_FORMAT_C8,
 };
 
@@ -501,7 +502,8 @@ static const struct pl111_variant_data pl110_nspire_classic = {
 	.is_pl110 = true,
 	.formats = pl110_nspire_classic_pixel_formats,
 	.nformats = ARRAY_SIZE(pl110_nspire_classic_pixel_formats),
-	.fb_depth = 8,
+	/* 16 levels of gray: 4 bpp, as the TI-Nspire OS */
+	.fb_depth = 4,
 	.palette = true,
 };
 
