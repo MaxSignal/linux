@@ -796,19 +796,36 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 }
 
 /*
- * When a lookup fails: the directory's inode, and the start of its entries,
- * 16 bytes a line, to tell how the real format differs from the documented
- * one.
+ * When a lookup fails: the directory's entries, one a line (position,
+ * attributes, inode index, name), and the bytes where the walk stopped.
  */
 static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
 {
-	u8 data[0x60];
-	size_t n = min_t(u64, sizeof(data), dir->size);
+	u8 e[REL_DIRENT_NAME + 2 * 24];
+	char name[25];
+	u64 pos = 0;
 
-	if (!rel_read_block(t, dir->block, buf, t->rbs))
-		print_hex_dump(KERN_ERR, "tifs inode ", DUMP_PREFIX_OFFSET, 16, 1, buf, 0x50, false);
-	if (!rel_read_inode_data(t, dir, 0, data, n, buf))
-		print_hex_dump(KERN_ERR, "tifs dir ", DUMP_PREFIX_OFFSET, 16, 1, data, n, false);
+	while (pos + REL_DIRENT_NAME <= dir->size) {
+		size_t n = min_t(u64, sizeof(e), dir->size - pos), i;
+		u32 len;
+		u16 m;
+
+		if (rel_read_inode_data(t, dir, pos, e, n, buf))
+			return;
+		len = get_unaligned_le32(e + REL_DIRENT_LEN);
+		m = get_unaligned_le16(e + REL_DIRENT_NAMELEN);
+		if (e[0] != 0x80 || len < REL_DIRENT_NAME || len > dir->size - pos)
+			break;
+		for (i = 0; i < m / 2 && i < sizeof(name) - 1 &&
+			    REL_DIRENT_NAME + 2 * i < n; i++)
+			name[i] = e[REL_DIRENT_NAME + 2 * i + 1] ? '?' : e[REL_DIRENT_NAME + 2 * i];
+		name[i] = '\0';
+		pr_err("tifs ent %03llx a%02x i%u %s\n", pos, e[REL_DIRENT_ATTR],
+		       get_unaligned_le32(e + REL_DIRENT_INDEX), name);
+		pos += len;
+	}
+	if (pos + 16 <= dir->size && !rel_read_inode_data(t, dir, pos, e, 16, buf))
+		pr_err("tifs end %03llx: %*ph\n", pos, 16, e);
 }
 
 static int tifs_find_file(struct tifs *t)
