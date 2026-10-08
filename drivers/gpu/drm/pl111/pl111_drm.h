@@ -50,6 +50,7 @@
 
 #define CLCD_PALL		0x00000200
 #define CLCD_PALETTE		0x00000200
+#define PL111_PALETTE_SIZE	256
 
 #define TIM2_PCD_LO_MASK	GENMASK(4, 0)
 #define TIM2_PCD_LO_BITS	5
@@ -115,6 +116,8 @@ struct drm_minor;
  * @formats: array of supported pixel formats on this variant
  * @nformats: the length of the array of supported pixel formats
  * @fb_depth: desired depth per pixel on the default framebuffer
+ * @palette: the formats include DRM_FORMAT_C8, which uses the palette
+ *	(loaded from the CRTC gamma LUT)
  */
 struct pl111_variant_data {
 	const char *name;
@@ -127,6 +130,7 @@ struct pl111_variant_data {
 	const u32 *formats;
 	unsigned int nformats;
 	unsigned int fb_depth;
+	bool palette;
 };
 
 struct pl111_drm_dev_private {
