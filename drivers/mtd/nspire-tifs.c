@@ -750,6 +750,12 @@ static int rel_index_lookup(struct tifs *t, const struct rel_inode *index, u32 i
 #define REL_DIRENT_INDEX	11
 #define REL_DIRENT_NAME		18
 
+/* Entries are whole 16-byte units, at least a header long */
+static bool rel_dirent_len_ok(u32 len, u64 left)
+{
+	return len >= REL_DIRENT_NAME && len % 16 == 0 && len <= left;
+}
+
 /* Look a name up in a directory; returns the inode index */
 static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const char *name,
 			  size_t namelen, u32 *idx, bool *is_dir, u8 *buf)
@@ -766,10 +772,15 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 		ret = rel_read_inode_data(t, dir, pos, hdr, sizeof(hdr), buf);
 		if (ret)
 			return ret;
-		if (hdr[0] != 0x80)
-			break;
 		len = get_unaligned_le32(hdr + REL_DIRENT_LEN);
 		m = get_unaligned_le16(hdr + REL_DIRENT_NAMELEN);
+		if (hdr[0] != 0x80) {
+			/* Not an entry in use (?): step over it if its length holds */
+			if (!rel_dirent_len_ok(len, dir->size - pos))
+				break;
+			pos += len;
+			continue;
+		}
 		if (m % 2 || len < sizeof(hdr) + m || len > dir->size - pos)
 			return -EUCLEAN;
 
@@ -814,18 +825,18 @@ static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
 			return;
 		len = get_unaligned_le32(e + REL_DIRENT_LEN);
 		m = get_unaligned_le16(e + REL_DIRENT_NAMELEN);
-		if (e[0] != 0x80 || len < REL_DIRENT_NAME || len > dir->size - pos)
+		if (!rel_dirent_len_ok(len, dir->size - pos))
 			break;
 		for (i = 0; i < m / 2 && i < sizeof(name) - 1 &&
 			    REL_DIRENT_NAME + 2 * i < n; i++)
 			name[i] = e[REL_DIRENT_NAME + 2 * i + 1] ? '?' : e[REL_DIRENT_NAME + 2 * i];
 		name[i] = '\0';
-		pr_err("tifs ent %03llx a%02x i%u %s\n", pos, e[REL_DIRENT_ATTR],
+		pr_err("ent %03llx %02x a%02x i%u %s\n", pos, e[0], e[REL_DIRENT_ATTR],
 		       get_unaligned_le32(e + REL_DIRENT_INDEX), name);
 		pos += len;
 	}
 	if (pos + 16 <= dir->size && !rel_read_inode_data(t, dir, pos, e, 16, buf))
-		pr_err("tifs end %03llx: %*ph\n", pos, 16, e);
+		pr_err("end %03llx: %*ph\n", pos, 16, e);
 }
 
 static int tifs_find_file(struct tifs *t)
