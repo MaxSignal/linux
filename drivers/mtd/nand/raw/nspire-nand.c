@@ -60,9 +60,10 @@
 #define PHX_OP_CMD2			GENMASK(19, 12)
 #define PHX_OP_CMD2_VALID		BIT(20)
 /*
- * Move one byte of memory per byte of the chip; without it, the DMA writes
- * each byte of the chip four times, and moves a quarter of the data. The
- * TI-Nspire OS sets it.
+ * For page data: move one byte of memory per byte of the chip. Without it,
+ * a page read writes each byte of the chip four times in memory, and moves
+ * a quarter of the data; with it, READ ID finds no chip. The TI-Nspire OS
+ * sets it for its page operations.
  */
 #define PHX_OP_DATA_BYTES		BIT(21)
 #define PHX_OP_DATA			BIT(22)
@@ -330,7 +331,12 @@ static int nspire_classic_exec(struct nand_chip *chip,
 		writel(op.addrs[i], nand->regs + PHX_ADDR(i));
 
 	if (op.data) {
-		ctrl |= PHX_OP_DATA | PHX_OP_DATA_BYTES;
+		ctrl |= PHX_OP_DATA;
+		/* Page data: written (SEQIN), or read (READ0/READ1/READOOB) */
+		if (op.data->type == NAND_OP_DATA_OUT_INSTR ||
+		    op.cmd[0] == NAND_CMD_READ0 || op.cmd[0] == NAND_CMD_READ1 ||
+		    op.cmd[0] == NAND_CMD_READOOB)
+			ctrl |= PHX_OP_DATA_BYTES;
 		if (op.data->type == NAND_OP_DATA_OUT_INSTR) {
 			ctrl |= PHX_OP_WRITE;
 			memcpy(nand->dma_buf,
