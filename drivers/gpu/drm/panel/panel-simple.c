@@ -4995,9 +4995,10 @@ static const struct drm_display_mode ti_nspire_classic_lcd_mode[] = {
 		 */
 		.clock = 3600,
 		.hdisplay = 320,
-		.hsync_start = 320 + 6,
-		.hsync_end = 320 + 6 + 6,
-		.htotal = 320 + 6 + 6 + 6,
+		/* As short as the controller allows, as the TI-Nspire OS does */
+		.hsync_start = 320 + 1,
+		.hsync_end = 320 + 1 + 1,
+		.htotal = 320 + 1 + 1 + 1,
 		.vdisplay = 240,
 		.vsync_start = 240 + 0,
 		.vsync_end = 240 + 0 + 1,
