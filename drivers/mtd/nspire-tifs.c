@@ -736,16 +736,30 @@ static int rel_index_lookup(struct tifs *t, const struct rel_inode *index, u32 i
 	return ret;
 }
 
+/*
+ * Directory entries, as on a real TI-Nspire: 0x80, a checksum (?), the
+ * length of the entry (u32 at 3), the length of the name in bytes (u16 at
+ * 7), attributes at 9, the inode index (u32 at 11), and the UTF-16 name at
+ * 18.
+ */
+#define REL_DIRENT_LEN		3
+#define REL_DIRENT_NAMELEN	7
+#define REL_DIRENT_ATTR		9
+#define REL_DIRENT_ATTR_USED	BIT(0)
+#define REL_DIRENT_ATTR_DIR	BIT(1)
+#define REL_DIRENT_INDEX	11
+#define REL_DIRENT_NAME		18
+
 /* Look a name up in a directory; returns the inode index */
 static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const char *name,
 			  size_t namelen, u32 *idx, bool *is_dir, u8 *buf)
 {
-	u8 hdr[12];
+	u8 hdr[REL_DIRENT_NAME];
 	u64 pos = 0;
 	int ret;
 
 	while (pos + sizeof(hdr) <= dir->size) {
-		u32 pad;
+		u32 len;
 		u16 m;
 		size_t i;
 
@@ -754,12 +768,12 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 			return ret;
 		if (hdr[0] != 0x80)
 			break;
-		pad = get_unaligned_le32(hdr + 2);
-		m = get_unaligned_le16(hdr + 6);
-		if (m % 2 || pad > t->rbs || pos + sizeof(hdr) + m > dir->size)
+		len = get_unaligned_le32(hdr + REL_DIRENT_LEN);
+		m = get_unaligned_le16(hdr + REL_DIRENT_NAMELEN);
+		if (m % 2 || len < sizeof(hdr) + m || len > dir->size - pos)
 			return -EUCLEAN;
 
-		if ((hdr[8] & 1) && m == 2 * namelen) {
+		if ((hdr[REL_DIRENT_ATTR] & REL_DIRENT_ATTR_USED) && m == 2 * namelen) {
 			u8 wname[2 * NAME_MAX];
 			bool match = true;
 
@@ -771,12 +785,12 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 			for (i = 0; i < namelen && match; i++)
 				match = !wname[2 * i + 1] && tolower(wname[2 * i]) == tolower(name[i]);
 			if (match) {
-				*idx = get_unaligned_le16(hdr + 10);
-				*is_dir = hdr[8] & 2;
+				*idx = get_unaligned_le32(hdr + REL_DIRENT_INDEX);
+				*is_dir = hdr[REL_DIRENT_ATTR] & REL_DIRENT_ATTR_DIR;
 				return 0;
 			}
 		}
-		pos += sizeof(hdr) + m + pad;
+		pos += len;
 	}
 	return -ENOENT;
 }
