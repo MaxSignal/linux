@@ -781,6 +781,22 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 	return -ENOENT;
 }
 
+/*
+ * When a lookup fails: the directory's inode, and the start of its entries,
+ * 16 bytes a line, to tell how the real format differs from the documented
+ * one.
+ */
+static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
+{
+	u8 data[0x60];
+	size_t n = min_t(u64, sizeof(data), dir->size);
+
+	if (!rel_read_block(t, dir->block, buf, t->rbs))
+		print_hex_dump(KERN_ERR, "tifs inode ", DUMP_PREFIX_OFFSET, 16, 1, buf, 0x50, false);
+	if (!rel_read_inode_data(t, dir, 0, data, n, buf))
+		print_hex_dump(KERN_ERR, "tifs dir ", DUMP_PREFIX_OFFSET, 16, 1, data, n, false);
+}
+
 static int tifs_find_file(struct tifs *t)
 {
 	struct rel_inode index, cur;
@@ -857,11 +873,18 @@ static int tifs_find_file(struct tifs *t)
 			goto out;
 		}
 		end = strchrnul(p, '/');
-		ret = rel_dir_lookup(t, &cur, p, end - p, &idx, &is_dir, buf) ?:
-		      rel_index_lookup(t, &index, idx, &block, buf) ?:
+		ret = rel_dir_lookup(t, &cur, p, end - p, &idx, &is_dir, buf);
+		if (ret) {
+			pr_err("%s: %.*s: %d in a directory of %llu bytes (mode %u)\n",
+			       tifs_path, (int)(end - p), p, ret, cur.size, cur.mode);
+			rel_dump_dir(t, &cur, buf);
+			goto out;
+		}
+		ret = rel_index_lookup(t, &index, idx, &block, buf) ?:
 		      rel_get_inode(t, block, &cur, buf);
 		if (ret) {
-			pr_err("%s: %.*s: %d\n", tifs_path, (int)(end - p), p, ret);
+			pr_err("%s: %.*s: inode index %u, block %u: %d\n", tifs_path,
+			       (int)(end - p), p, idx, block, ret);
 			goto out;
 		}
 		p = end;
