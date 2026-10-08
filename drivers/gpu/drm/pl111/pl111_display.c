@@ -17,6 +17,7 @@
 
 #include <drm/drm_fb_dma_helper.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_color_mgmt.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_dma_helper.h>
@@ -117,6 +118,63 @@ static int pl111_display_check(struct drm_simple_display_pipe *pipe,
 	return 0;
 }
 
+/*
+ * A grayscale panel: a monochrome STN panel on the 8 bit interface. The
+ * Y value is the level of black.
+ */
+static bool pl111_panel_is_grayscale(struct pl111_drm_dev_private *priv)
+{
+	struct drm_connector *connector = priv->connector;
+
+	return connector &&
+	       connector->display_info.num_bus_formats == 1 &&
+	       connector->display_info.bus_formats[0] == MEDIA_BUS_FMT_Y8_1X8;
+}
+
+/*
+ * Load the 256 entry palette used by DRM_FORMAT_C8 from the gamma LUT, or
+ * a gray ramp without one. Monochrome STN panels only use the red field:
+ * colours are turned into levels of black there.
+ */
+static void pl111_load_palette(struct pl111_drm_dev_private *priv,
+			       struct drm_crtc_state *cstate)
+{
+	const struct drm_color_lut *lut = NULL;
+	bool grayscale = pl111_panel_is_grayscale(priv);
+	u32 word = 0;
+	int i;
+
+	if (cstate->gamma_lut &&
+	    drm_color_lut_size(cstate->gamma_lut) == PL111_PALETTE_SIZE)
+		lut = cstate->gamma_lut->data;
+
+	for (i = 0; i < PL111_PALETTE_SIZE; i++) {
+		u32 r, g, b, entry;
+
+		if (lut) {
+			r = lut[i].red;
+			g = lut[i].green;
+			b = lut[i].blue;
+		} else {
+			r = g = b = i * 0x101;
+		}
+
+		if (grayscale) {
+			u32 y = (r * 77 + g * 150 + b * 29) >> 8;
+
+			r = g = b = 0xffff - y;
+		}
+
+		entry = (r >> 11) | (g >> 11) << 5 | (b >> 11) << 10;
+		if (i & 1) {
+			word |= entry << 16;
+			writel(word, priv->regs + CLCD_PALETTE + (i - 1) * 2);
+		} else {
+			word = entry;
+		}
+	}
+}
+
 static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 				 struct drm_crtc_state *cstate,
 				 struct drm_plane_state *plane_state)
@@ -129,18 +187,26 @@ static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 	struct drm_framebuffer *fb = plane->state->fb;
 	struct drm_connector *connector = priv->connector;
 	struct drm_bridge *bridge = priv->bridge;
-	bool grayscale = false;
+	bool grayscale = pl111_panel_is_grayscale(priv);
+	unsigned long rate;
 	u32 cntl;
 	u32 ppl, hsw, hfp, hbp;
 	u32 lpp, vsw, vfp, vbp;
 	u32 cpl, tim2;
 	int ret;
 
-	ret = clk_set_rate(priv->clk, mode->clock * 1000);
+	/*
+	 * A monochrome STN panel on the 8 bit interface takes 8 pixels on
+	 * each panel clock.
+	 */
+	rate = mode->clock * 1000;
+	if (grayscale)
+		rate /= 8;
+	ret = clk_set_rate(priv->clk, rate);
 	if (ret) {
 		drm_err(drm,
-			"Failed to set pixel clock rate to %d: %d\n",
-			mode->clock * 1000, ret);
+			"Failed to set panel clock rate to %lu: %d\n",
+			rate, ret);
 	}
 
 	clk_prepare_enable(priv->clk);
@@ -155,7 +221,11 @@ static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 	vfp = mode->vsync_start - mode->vdisplay;
 	vbp = mode->vtotal - mode->vsync_end;
 
-	cpl = mode->hdisplay - 1;
+	/* Panel clocks per line */
+	if (grayscale)
+		cpl = mode->hdisplay / 8 - 1;
+	else
+		cpl = mode->hdisplay - 1;
 
 	writel((ppl << 2) |
 	       (hsw << 8) |
@@ -189,11 +259,6 @@ static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 		if (connector->display_info.bus_flags &
 		    DRM_BUS_FLAG_PIXDATA_DRIVE_NEGEDGE)
 			tim2 |= TIM2_IPC;
-
-		if (connector->display_info.num_bus_formats == 1 &&
-		    connector->display_info.bus_formats[0] ==
-		    MEDIA_BUS_FMT_Y8_1X8)
-			grayscale = true;
 
 		/*
 		 * The AC pin bias frequency is set to max count when using
@@ -241,7 +306,7 @@ static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 	 * format.
 	 */
 	if (grayscale)
-		cntl = CNTL_LCDEN | CNTL_LCDMONO8;
+		cntl = CNTL_LCDEN | CNTL_LCDBW | CNTL_LCDMONO8;
 	else
 		/* Else we assume TFT display */
 		cntl = CNTL_LCDEN | CNTL_LCDTFT | CNTL_LCDVCOMP(1);
@@ -257,6 +322,10 @@ static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 	 * the PL110 (LCDC) however uses the standard DRM format.
 	 */
 	switch (fb->format->format) {
+	case DRM_FORMAT_C8:
+		cntl |= CNTL_LCDBPP8;
+		pl111_load_palette(priv, cstate);
+		break;
 	case DRM_FORMAT_BGR888:
 		/* Only supported on the ST Micro variant */
 		if (priv->variant->st_bitmux_control)
@@ -403,6 +472,10 @@ static void pl111_display_update(struct drm_simple_display_pipe *pipe,
 
 		writel(addr, priv->regs + CLCD_UBAS);
 	}
+
+	if (fb && fb->format->format == DRM_FORMAT_C8 &&
+	    crtc->state->color_mgmt_changed)
+		pl111_load_palette(priv, crtc->state);
 
 	if (event) {
 		crtc->state->event = NULL;
@@ -595,6 +668,15 @@ int pl111_display_init(struct drm_device *drm)
 					   priv->connector);
 	if (ret)
 		return ret;
+
+	if (priv->variant->palette) {
+		ret = drm_mode_crtc_set_gamma_size(&priv->pipe.crtc,
+						   PL111_PALETTE_SIZE);
+		if (ret)
+			return ret;
+		drm_crtc_enable_color_mgmt(&priv->pipe.crtc, 0, false,
+					   PL111_PALETTE_SIZE);
+	}
 
 	return 0;
 }
