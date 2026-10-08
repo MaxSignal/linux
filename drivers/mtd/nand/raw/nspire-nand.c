@@ -275,9 +275,9 @@ static int nspire_classic_waitrdy(struct nspire_nand *nand,
 {
 	u32 status;
 
-	return readl_poll_timeout(nand->regs + PHX_STATUS, status,
-				  status & NAND_STATUS_READY, 10,
-				  timeout_ms * USEC_PER_MSEC);
+	return readl_poll_timeout_atomic(nand->regs + PHX_STATUS, status,
+					 status & NAND_STATUS_READY, 1,
+					 timeout_ms * USEC_PER_MSEC);
 }
 
 static int nspire_classic_run(struct nspire_nand *nand, u32 ctrl)
@@ -288,8 +288,14 @@ static int nspire_classic_run(struct nspire_nand *nand, u32 ctrl)
 	writel(ctrl, nand->regs + PHX_OP);
 	writel(1, nand->regs + PHX_START);
 
-	ret = readl_poll_timeout(nand->regs + PHX_START, busy, !(busy & PHX_BUSY),
-				 10, NSPIRE_NAND_OP_TIMEOUT_US);
+	/*
+	 * An operation takes tens of microseconds (a block erase a few
+	 * milliseconds), and the classic models' tick is 7.8 ms (128 Hz):
+	 * sleeping between polls would make every operation last a tick.
+	 */
+	ret = readl_poll_timeout_atomic(nand->regs + PHX_START, busy,
+					!(busy & PHX_BUSY), 1,
+					NSPIRE_NAND_OP_TIMEOUT_US);
 	if (ret)
 		dev_err(nand->dev, "operation %#x timed out\n", ctrl);
 
