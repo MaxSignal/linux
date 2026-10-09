@@ -150,6 +150,8 @@ struct tifs {
 	/* Reliance */
 	u32 rbs;			/* block size */
 	struct rel_inode index;		/* inode of the index file */
+	u32 meta_block[2];		/* the two META blocks, ... */
+	int meta_best;			/* ... and the one used */
 	u32 *blocks;			/* the file's blocks */
 	u32 nblocks;
 	u64 file_size, disk_size;
@@ -1026,6 +1028,42 @@ static void tifs_dump(const char *what, const u8 *p, unsigned int len)
 }
 
 /*
+ * When the index file sends an index to a block that is not its indirect
+ * block: the index file's entries around it, the two META blocks (start,
+ * and where their last bytes in use are), and the blocks of the volume
+ * that are indirect blocks of that index (a scan of the whole volume).
+ */
+static void rel_dump_index(struct tifs *t, u32 idx, u8 *buf)
+{
+	u32 b, nblocks = div_u64((u64)t->logical_pages * t->page, t->rbs), v[5], i, last;
+	unsigned int found = 0;
+
+	for (i = 0; i < 5; i++)
+		if (idx < 2 + i || rel_index_lookup(t, &t->index, idx - 2 + i, &v[i], buf))
+			v[i] = U32_MAX;
+	pr_err("indx %u-%u: %d %d %d %d %d\n", idx - 2, idx + 2, v[0], v[1], v[2], v[3], v[4]);
+	for (i = 0; i < 2; i++) {
+		if (rel_read_block(t, t->meta_block[i], buf, t->rbs))
+			continue;
+		for (last = t->rbs; last > 0 && (buf[last - 1] == 0 || buf[last - 1] == 0xff); last--)
+			;
+		pr_err("meta %u%s: block %u, in use up to %u\n", i, i == t->meta_best ? " (used)" : "",
+		       t->meta_block[i], last);
+		tifs_dump("m", buf, 0x20);
+	}
+	for (b = 0; b < nblocks && found < 4; b++) {
+		if (rel_read_block(t, b, buf, 8))
+			continue;
+		if ((!memcmp(buf, "INDI", 4) || !memcmp(buf, "DBLI", 4)) &&
+		    get_unaligned_le32(buf + 4) == idx) {
+			pr_err("%.4s %u at block %u\n", buf, idx, b);
+			found++;
+		}
+	}
+	pr_err("scan done: %u found\n", found);
+}
+
+/*
  * When block n of a file cannot be found: its inode, then down the path to
  * that block, each indirect block's index, where the index file puts it,
  * its header and the pointer the path takes.
@@ -1057,6 +1095,11 @@ static void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u32 n, u8
 		if (ret)
 			return;
 		tifs_dump("n", buf, 8);
+		if (memcmp(buf, level == 3 ? "DBLI" : "INDI", 4) ||
+		    get_unaligned_le32(buf + 4) != idx) {
+			rel_dump_index(t, idx, buf);
+			return;
+		}
 		slot = level == 3 ? n / per % per : n % per;
 		tifs_dump("np", buf + REL_INODE_DATA + 4 * (slot & ~1), 8);
 	}
@@ -1105,6 +1148,9 @@ static int tifs_find_file(struct tifs *t)
 		if (best < 0 || get_unaligned_le32(meta[i] + 4) > get_unaligned_le32(meta[best] + 4))
 			best = i;
 	}
+	t->meta_block[0] = meta_ptr[0];
+	t->meta_block[1] = meta_ptr[1];
+	t->meta_best = best;
 	if (best < 0) {
 		pr_err("no Reliance META block\n");
 		ret = -EUCLEAN;
