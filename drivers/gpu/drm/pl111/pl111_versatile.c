@@ -505,6 +505,11 @@ static const struct pl111_variant_data pl110_nspire_classic = {
 	/* 16 levels of gray: 4 bpp, as the TI-Nspire OS */
 	.fb_depth = 4,
 	.palette = true,
+	/*
+	 * Started again, the STN panel shows the picture shifted by up to
+	 * two words of pixels, differently each time
+	 */
+	.keep_enabled = true,
 };
 
 int pl111_versatile_init(struct drm_device *dev, struct pl111_drm_dev_private *priv)
