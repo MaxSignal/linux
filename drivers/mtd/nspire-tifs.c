@@ -808,13 +808,16 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 
 /*
  * When a lookup fails: the directory's entries, one a line (position,
- * attributes, inode index, name), and the bytes where the walk stopped.
+ * attributes, inode index, name), the bytes where the walk stopped, and
+ * those of the entry whose name begins the most like the one looked up.
  */
-static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
+static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, const char *want,
+			 size_t wantlen, u8 *buf)
 {
 	u8 e[REL_DIRENT_NAME + 2 * 24];
 	char name[25];
-	u64 pos = 0;
+	u64 pos = 0, near = 0;
+	size_t best = 0;
 
 	while (pos + REL_DIRENT_NAME <= dir->size) {
 		size_t n = min_t(u64, sizeof(e), dir->size - pos), i;
@@ -831,12 +834,21 @@ static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
 			    REL_DIRENT_NAME + 2 * i < n; i++)
 			name[i] = e[REL_DIRENT_NAME + 2 * i + 1] ? '?' : e[REL_DIRENT_NAME + 2 * i];
 		name[i] = '\0';
+		for (i = 0; i < wantlen && name[i] && tolower(name[i]) == tolower(want[i]); i++)
+			;
+		if (i > best) {
+			best = i;
+			near = pos;
+		}
 		pr_err("ent %03llx %02x a%02x i%u %s\n", pos, e[0], e[REL_DIRENT_ATTR],
 		       get_unaligned_le32(e + REL_DIRENT_INDEX), name);
 		pos += len;
 	}
 	if (pos + 16 <= dir->size && !rel_read_inode_data(t, dir, pos, e, 16, buf))
 		pr_err("end %03llx: %*ph\n", pos, 16, e);
+	if (best && !rel_read_inode_data(t, dir, near, e, min_t(u64, 48, dir->size - near), buf))
+		print_hex_dump(KERN_ERR, "near ", DUMP_PREFIX_OFFSET, 16, 1, e,
+			       min_t(u64, 48, dir->size - near), false);
 }
 
 static int tifs_find_file(struct tifs *t)
@@ -919,7 +931,7 @@ static int tifs_find_file(struct tifs *t)
 		if (ret) {
 			pr_err("%s: %.*s: %d in a directory of %llu bytes (mode %u)\n",
 			       tifs_path, (int)(end - p), p, ret, cur.size, cur.mode);
-			rel_dump_dir(t, &cur, buf);
+			rel_dump_dir(t, &cur, p, end - p, buf);
 			goto out;
 		}
 		ret = rel_index_lookup(t, &index, idx, &block, buf) ?:
