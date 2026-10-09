@@ -157,12 +157,16 @@ struct tifs {
 	u32 *map_pos;			/* when it was written: sequence, page */
 	u32 *discard_list;		/* the discard records, until applied */
 	unsigned int ndiscards;
+	s16 *alloc_b3;			/* byte 3 of the allocation info, per index */
+	u8 *data_spare, *disc_spare;	/* spare areas of a data page, a record */
+	bool *touched;			/* regions written to since compacting */
 	u32 logical_pages;
 	u8 *hdr_template, *hdr_spare;	/* a valid unit header page */
 	struct tifs_ecc ecc;
 	bool writable;
 	const char *ro_reason;
 	bool space_reported;		/* once, when reclaiming finds no room */
+	bool compacting;		/* moving a unit's pages within its region */
 
 	/* Reliance */
 	u32 rbs;			/* block size */
@@ -648,8 +652,12 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 	t->map = vmalloc_array(t->logical_pages, sizeof(u32));
 	t->map_pos = vcalloc(t->logical_pages, sizeof(u32));
 	t->discard_list = vmalloc_array(t->nunits * (t->unit_pages - 1), sizeof(u32));
-	if (!t->map || !t->map_pos || !t->discard_list)
+	t->alloc_b3 = kmalloc_array(t->region_pages, sizeof(s16), GFP_KERNEL);
+	t->touched = kcalloc(regions, sizeof(bool), GFP_KERNEL);
+	if (!t->map || !t->map_pos || !t->discard_list || !t->alloc_b3 || !t->touched)
 		return -ENOMEM;
+	for (u = 0; u < t->region_pages; u++)
+		t->alloc_b3[u] = -1;
 	memset(t->map, 0xff, t->logical_pages * sizeof(u32));
 
 	*nsamples = 0;
@@ -672,6 +680,8 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 				break;
 			}
 			if (alloc == FFX_ALLOC_DISCARD && spare_alloc_valid(t, t->pspare)) {
+				if (!t->disc_spare)
+					t->disc_spare = kmemdup(t->pspare, t->oob, GFP_KERNEL);
 				t->discard_list[t->ndiscards++] = phys;
 				unit->discards++;
 				continue;
@@ -686,6 +696,11 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 			}
 			tifs_map_page(t, unit->region * t->region_pages + (alloc & FFX_ALLOC_INDEX),
 				      phys, unit->seq);
+			/* what a new page of this index needs in its spare area */
+			if (t->alloc_off + 3 < t->oob)
+				t->alloc_b3[alloc & FFX_ALLOC_INDEX] = t->pspare[t->alloc_off + 3];
+			if (!t->data_spare)
+				t->data_spare = kmemdup(t->pspare, t->oob, GFP_KERNEL);
 			/*
 			 * Sample pages from all over the flash (reservoir
 			 * sampling): a big image file of zeros written in one
@@ -1662,140 +1677,165 @@ static int tifs_reclaim(struct tifs *t)
 
 /*
  * The FlashFX of a real Touchpad keeps no unit free (the layout with a next
- * unit): a full region goes on with the unit its newest unit names, whose
- * latest pages first move to the newest unit of their own region. Taking
- * a unit for a region must not need a new unit for that same region, nor
- * be the newest unit of its own region.
+ * unit), and most of its regions hold data in nearly all their pages. The
+ * order of copies is their unit's sequence number, then their page: a new
+ * copy may go to the free pages of any unit of its region newer than the
+ * one holding the copy it replaces (or the discard record that dropped
+ * it), not only to the newest. A region short of free pages takes the unit
+ * whose latest pages are the fewest and fit in newer units of its own
+ * region, moves them there, erases it and gives it a header for itself;
+ * after each write, a region left with less than a unit of free pages
+ * compacts one of its units likewise when that gains much. Copies come
+ * before erasing: an interruption loses nothing.
  */
-static bool tifs_unit_takeable(struct tifs *t, u32 u, u32 region, const u32 *newest)
-{
-	const struct ffx_unit *unit;
 
-	if (u >= t->nunits)
-		return false;
-	unit = &t->units[u];
-	if (unit->busy || unit->seq == U32_MAX)
-		return false;
-	if (!unit->seq)
-		return true;			/* free (an interrupted erase) */
-	if (newest[unit->region] == u)
-		return false;
-	if (unit->region == region && unit->live)
-		return false;
-	/* its pages have to fit in its region's newest unit */
-	return newest[unit->region] < t->nunits &&
-	       t->unit_pages - t->units[newest[unit->region]].next_free >=
-	       unit->live + (unit->discards ? 1 : 0);
+static unsigned int tifs_need(const struct ffx_unit *unit)
+{
+	return unit->live + (unit->discards ? 1 : 0);
 }
 
-static void tifs_newest_units(struct tifs *t, u32 *newest)
+/* Free pages in the units of a region newer than seq */
+static unsigned int tifs_tails(struct tifs *t, u32 region, u32 seq)
 {
-	unsigned int u;
+	unsigned int u, n = 0;
 
-	for (u = 0; u < t->nregions; u++)
-		newest[u] = t->nunits;
 	for (u = 0; u < t->nunits; u++) {
 		const struct ffx_unit *unit = &t->units[u];
 
-		if (unit_in_use(unit) && unit->region < t->nregions &&
-		    (newest[unit->region] == t->nunits ||
-		     unit->seq > t->units[newest[unit->region]].seq))
-			newest[unit->region] = u;
+		if (unit_in_use(unit) && !unit->busy && unit->region == region && unit->seq > seq)
+			n += t->unit_pages - unit->next_free;
 	}
+	return n;
 }
 
-/*
- * The unit a region should go on with next: one that can be taken, not
- * already named by another region, with the fewest latest pages to move,
- * then the least erased
- */
-static u32 tifs_pick_next(struct tifs *t, u32 region, u32 not, const u32 *newest)
+static u32 tifs_max_seq(struct tifs *t, u32 region)
 {
-	unsigned int u, r, best = t->nunits;
+	unsigned int u;
+	u32 seq = 0;
+
+	for (u = 0; u < t->nunits; u++)
+		if (unit_in_use(&t->units[u]) && t->units[u].region == region)
+			seq = max(seq, t->units[u].seq);
+	return seq;
+}
+
+/* The oldest unit of a region with a free page past position after */
+static u32 tifs_slot(struct tifs *t, u32 region, u32 after)
+{
+	unsigned int u, best = t->nunits;
 
 	for (u = 0; u < t->nunits; u++) {
-		const struct ffx_unit *unit = &t->units[u], *b;
+		const struct ffx_unit *unit = &t->units[u];
 
-		if (u == not || !tifs_unit_takeable(t, u, region, newest))
+		if (!unit_in_use(unit) || unit->busy || unit->region != region ||
+		    unit->next_free >= t->unit_pages ||
+		    tifs_pos(t, unit->seq, unit->next_free) <= after)
 			continue;
-		for (r = 0; r < t->nregions; r++)
-			if (newest[r] < t->nunits && newest[r] != not &&
-			    t->units[newest[r]].next == u)
-				break;
-		if (r < t->nregions)
-			continue;
-		if (best == t->nunits) {
-			best = u;
-			continue;
-		}
-		b = &t->units[best];
-		if (unit->live < b->live ||
-		    (unit->live == b->live && unit->erase_count < b->erase_count))
+		if (best == t->nunits || unit->seq < t->units[best].seq)
 			best = u;
 	}
 	return best;
 }
 
-static int tifs_alloc_page(struct tifs *t, u32 region, u32 *phys, unsigned int depth);
+/*
+ * The unit to erase for a region: the fewest pages to move, which fit in
+ * newer units of their region (else the least overflow), then the least
+ * erased. Of the region itself, only a unit whose pages fit.
+ */
+static u32 tifs_victim(struct tifs *t, u32 region, u32 not)
+{
+	unsigned int u, best = t->nunits, best_over = 0;
+
+	for (u = 0; u < t->nunits; u++) {
+		const struct ffx_unit *unit = &t->units[u], *b;
+		unsigned int need, tails, over;
+
+		if (u == not || unit->busy || unit->seq == U32_MAX)
+			continue;
+		if (!unit->seq)
+			return u;		/* free: an interrupted erase */
+		need = tifs_need(unit);
+		tails = need ? tifs_tails(t, unit->region, unit->seq) : 0;
+		if (unit->region == region && need > tails)
+			continue;
+		over = need > tails ? need - tails : 0;
+		if (best < t->nunits) {
+			b = &t->units[best];
+			if (over > best_over ||
+			    (over == best_over && (need > tifs_need(b) ||
+			     (need == tifs_need(b) && unit->erase_count >= b->erase_count))))
+				continue;
+		}
+		best = u;
+		best_over = over;
+	}
+	return best;
+}
+
+static int tifs_chain_alloc(struct tifs *t, u32 region, u32 after, u32 *phys, unsigned int depth);
 
 /*
- * Write a discard record for a region: every page of it without data. A
- * unit holding discard records is going: its records go on in this one.
+ * A discard record for a region after position after: every page of it
+ * without data, which no earlier copy may bring back
  */
-static int tifs_write_discards(struct tifs *t, u32 region, const u8 *spare, unsigned int depth)
+static int tifs_put_discards(struct tifs *t, u32 region, u32 after, unsigned int depth)
 {
-	u32 phys, base = region * t->region_pages, j;
-	u8 *data = kzalloc(t->page, GFP_KERNEL), *sp = kmemdup(spare, t->oob, GFP_KERNEL);
+	u32 phys, pos, j, base = region * t->region_pages;
+	u8 *data, *sp;
 	int ret = -ENOMEM;
 
+	/* the spare area of one the TI-Nspire OS wrote, with this data's ECC */
+	if (!t->disc_spare)
+		return -EIO;
+	data = kzalloc(t->page, GFP_KERNEL);
+	sp = kmemdup(t->disc_spare, t->oob, GFP_KERNEL);
 	if (!data || !sp)
 		goto out;
 	for (j = 0; j < t->region_pages; j++)
 		if (t->map[base + j] == FFX_NO_PAGE)
 			data[j / 8] |= BIT(j % 8);
-	ret = tifs_alloc_page(t, region, &phys, depth);
+	ret = tifs_chain_alloc(t, region, after, &phys, depth);
 	if (ret)
 		goto out;
 	tifs_ecc_place(t, data, sp);
 	ret = tifs_write_checked(t, phys, data, sp);
 	t->units[phys / t->unit_pages].next_free++;
-	if (!ret)
-		t->units[phys / t->unit_pages].discards++;
+	if (ret)
+		goto out;
+	t->units[phys / t->unit_pages].discards++;
+	pos = tifs_pos(t, t->units[phys / t->unit_pages].seq, phys);
+	for (j = 0; j < t->region_pages; j++)
+		if (t->map[base + j] == FFX_NO_PAGE)
+			t->map_pos[base + j] = max(t->map_pos[base + j], pos);
 out:
 	kfree(data);
 	kfree(sp);
 	return ret;
 }
 
-/* Move the latest pages and discard records of unit u to their region */
-static int tifs_empty_unit(struct tifs *t, unsigned int u, unsigned int depth)
+/* Copy the latest pages of unit x (and its discard records) to newer units */
+static int tifs_chain_empty(struct tifs *t, u32 x, unsigned int depth)
 {
-	u32 region = t->units[u].region, p, phys, to, logical;
+	u32 region = t->units[x].region, p, phys, to, logical;
 	u8 *data = kmalloc(t->page, GFP_KERNEL), *spare = kmalloc(t->oob, GFP_KERNEL);
-	u8 *dspare = NULL;
 	u16 alloc;
 	int ret = -ENOMEM;
 
 	if (!data || !spare)
 		goto out;
-	for (p = 1; p < t->units[u].next_free; p++) {
-		phys = u * t->unit_pages + p;
+	for (p = 1; p < t->units[x].next_free; p++) {
+		phys = x * t->unit_pages + p;
 		ret = tifs_raw_read(t, phys, data, spare);
 		if (ret)
 			goto out;
 		alloc = spare_alloc(t, spare);
-		if (alloc == FFX_ALLOC_DISCARD) {
-			if (!dspare)
-				dspare = kmemdup(spare, t->oob, GFP_KERNEL);
-			continue;
-		}
 		if ((alloc & FFX_ALLOC_STATUS) != FFX_ALLOC_PAGE ||
 		    (alloc & FFX_ALLOC_INDEX) >= t->region_pages)
 			continue;
 		logical = region * t->region_pages + (alloc & FFX_ALLOC_INDEX);
 		if (t->map[logical] != phys)
 			continue;
-		ret = tifs_alloc_page(t, region, &to, depth);
+		ret = tifs_chain_alloc(t, region, t->map_pos[logical], &to, depth);
 		if (ret)
 			goto out;
 		ret = tifs_write_checked(t, to, data, spare);
@@ -1805,62 +1845,126 @@ static int tifs_empty_unit(struct tifs *t, unsigned int u, unsigned int depth)
 		tifs_map_page(t, logical, to, t->units[to / t->unit_pages].seq);
 	}
 	ret = 0;
-	if (t->units[u].discards)
-		ret = dspare ? tifs_write_discards(t, region, dspare, depth) : -EIO;
+	/* what its discard records dropped must stay dropped */
+	if (t->units[x].discards)
+		ret = tifs_put_discards(t, region, tifs_pos(t, t->units[x].seq, t->unit_pages - 1),
+				       depth);
 out:
-	kfree(dspare);
 	kfree(data);
 	kfree(spare);
 	return ret;
 }
 
-/* Go on with region's next unit: empty it, erase it, make it the newest */
-static int tifs_next_unit(struct tifs *t, u32 region, unsigned int depth)
+/* Empty unit x, erase it and make it the newest unit of region */
+static int tifs_take_unit(struct tifs *t, u32 x, u32 region, unsigned int depth)
 {
-	u32 *newest = kmalloc_array(t->nregions, sizeof(u32), GFP_KERNEL);
-	u32 cur, u, next;
-	int ret;
+	u32 next;
+	int ret = 0;
 
-	if (!newest)
-		return -ENOMEM;
-	if (depth > 4) {
-		ret = -ENOSPC;
-		goto out;
-	}
-	tifs_newest_units(t, newest);
-	cur = newest[region];
-	u = cur < t->nunits ? t->units[cur].next : t->nunits;
-	if (!tifs_unit_takeable(t, u, region, newest))
-		u = tifs_pick_next(t, region, t->nunits, newest);
-	ret = -ENOSPC;
-	if (u >= t->nunits)
-		goto out;
-
-	t->units[u].busy = true;
-	ret = 0;
-	if (t->units[u].seq)
-		ret = tifs_empty_unit(t, u, depth + 1) ?: tifs_erase_unit(t, u);
+	t->units[x].busy = true;
+	if (t->units[x].seq)
+		ret = tifs_chain_empty(t, x, depth + 1) ?: tifs_erase_unit(t, x);
 	if (!ret) {
-		tifs_newest_units(t, newest);
-		cur = newest[region];
-		next = tifs_pick_next(t, region, u, newest);
-		ret = tifs_write_header(t, u, region,
-					cur < t->nunits ? t->units[cur].seq + 1 : 1,
-					next < t->nunits ? next : u);
+		next = tifs_victim(t, region, x);
+		ret = tifs_write_header(t, x, region, tifs_max_seq(t, region) + 1,
+					next < t->nunits ? next : x);
 	}
-	t->units[u].busy = false;
-out:
-	if (ret == -ENOSPC && !t->space_reported) {
-		pr_err("FlashFX: no unit to go on with\n");
-		tifs_space_report(t);
-		t->space_reported = true;
-	}
-	kfree(newest);
+	t->units[x].busy = false;
 	return ret;
 }
 
-/* Where the next copy of a page of this region goes */
-static int tifs_alloc_page(struct tifs *t, u32 region, u32 *phys, unsigned int depth)
+/* Free pages for a region: a unit taken from where it costs the least */
+static int tifs_chain_unit(struct tifs *t, u32 region, unsigned int depth)
+{
+	u32 x;
+
+	x = depth > 8 ? t->nunits : tifs_victim(t, region, t->nunits);
+	if (x >= t->nunits) {
+		if (!t->space_reported) {
+			pr_err("FlashFX: no unit to take for region %u\n", region);
+			tifs_space_report(t);
+			t->space_reported = true;
+		}
+		return -ENOSPC;
+	}
+	return tifs_take_unit(t, x, region, depth);
+}
+
+/* Where a page of region goes that must come after position after */
+static int tifs_chain_alloc(struct tifs *t, u32 region, u32 after, u32 *phys, unsigned int depth)
+{
+	unsigned int i;
+	u32 u;
+	int ret;
+
+	for (i = 0; i < 4; i++) {
+		u = tifs_slot(t, region, after);
+		if (u < t->nunits) {
+			*phys = u * t->unit_pages + t->units[u].next_free;
+			t->touched[region] = true;
+			return 0;
+		}
+		ret = tifs_chain_unit(t, region, depth);
+		if (ret)
+			return ret;
+	}
+	return -ENOSPC;
+}
+
+/*
+ * After a write: a region with less than a unit of free pages compacts the
+ * unit with the fewest latest pages, when they fit in newer units and that
+ * gains at least a quarter of a unit
+ */
+static int tifs_compact(struct tifs *t, u32 region)
+{
+	unsigned int i, u, x, need;
+	int ret;
+
+	for (i = 0; i < 8; i++) {
+		if (tifs_tails(t, region, 0) >= t->unit_pages - 1)
+			return 0;
+		x = t->nunits;
+		for (u = 0; u < t->nunits; u++) {
+			const struct ffx_unit *unit = &t->units[u];
+
+			if (!unit_in_use(unit) || unit->busy || unit->region != region)
+				continue;
+			need = tifs_need(unit);
+			if (t->unit_pages - 1 - need < t->unit_pages / 4 ||
+			    (x < t->nunits && need >= tifs_need(&t->units[x])) ||
+			    tifs_tails(t, region, unit->seq) < need)
+				continue;
+			x = u;
+		}
+		if (x >= t->nunits)
+			return 0;
+		ret = tifs_take_unit(t, x, region, 0);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+static int tifs_compact_touched(struct tifs *t)
+{
+	unsigned int r;
+	int ret;
+
+	for (r = 0; r < t->nregions; r++) {
+		if (!t->touched[r])
+			continue;
+		t->touched[r] = false;
+		ret = tifs_compact(t, r);
+		if (ret)
+			return ret;
+		r = -1;		/* compacting touches regions too */
+	}
+	return 0;
+}
+
+/* Where the next copy of a page of this region goes, with free units */
+static int tifs_alloc_page(struct tifs *t, u32 region, u32 *phys)
 {
 	unsigned int u, cur;
 	int ret, tries;
@@ -1872,9 +1976,7 @@ static int tifs_alloc_page(struct tifs *t, u32 region, u32 *phys, unsigned int d
 			*phys = cur * t->unit_pages + t->units[cur].next_free;
 			return 0;
 		}
-		if (t->hdr->next)
-			ret = tifs_next_unit(t, region, depth);
-		else if (tifs_free_units(t) > 1)	/* one in reserve for reclaiming */
+		if (tifs_free_units(t) > 1)	/* one in reserve for reclaiming */
 			ret = tifs_new_unit(t, region, &u);
 		else
 			ret = tifs_reclaim(t);
@@ -1887,35 +1989,86 @@ static int tifs_alloc_page(struct tifs *t, u32 region, u32 *phys, unsigned int d
 static int tifs_write_logical_page(struct tifs *t, u32 logical, const u8 *data)
 {
 	u32 old = t->map[logical], phys, region = logical / t->region_pages;
+	u32 index = logical % t->region_pages;
 	int ret;
 
-	if (old == FFX_NO_PAGE) {
+	if (old == FFX_NO_PAGE && (!t->hdr->next || t->alloc_b3[index] < 0)) {
 		/* the loader wrote every page of the file */
 		pr_err_ratelimited("logical page %u was never written\n", logical);
 		return -EIO;
 	}
 
-	ret = tifs_alloc_page(t, region, &phys, 0);
+	if (t->hdr->next)
+		ret = tifs_chain_alloc(t, region, t->map_pos[logical], &phys, 0);
+	else
+		ret = tifs_alloc_page(t, region, &phys);
 	if (ret)
 		return ret;
 	/* the old copy may have moved while making room */
 	old = t->map[logical];
 
-	/* Spare area: the previous copy's, with this data's ECC */
-	ret = tifs_raw_read(t, old, NULL, t->wspare);
-	if (ret)
-		return ret;
+	/* Spare area: the previous copy's, or one made for a discarded page */
+	if (old != FFX_NO_PAGE) {
+		ret = tifs_raw_read(t, old, NULL, t->wspare);
+		if (ret)
+			return ret;
+	} else {
+		u8 *a = t->wspare + t->alloc_off;
+
+		memcpy(t->wspare, t->data_spare, t->oob);
+		put_unaligned_le16(FFX_ALLOC_PAGE | index, a);
+		a[2] = ~(a[0] ^ a[1]);
+		a[3] = t->alloc_b3[index];
+	}
 	tifs_ecc_place(t, data, t->wspare);
 
 	ret = tifs_write_checked(t, phys, data, t->wspare);
-	if (ret) {
-		/* skip the page; it stays unused */
-		t->units[phys / t->unit_pages].next_free++;
-		return ret;
-	}
 	t->units[phys / t->unit_pages].next_free++;
+	if (ret)
+		return ret;	/* the page stays unused */
 	tifs_map_page(t, logical, phys, t->units[phys / t->unit_pages].seq);
-	return 0;
+	return t->hdr->next ? tifs_compact_touched(t) : 0;
+}
+
+/*
+ * Discard the pages of the file within [ofs, ofs + len): for each region,
+ * a discard record (the layout with a next unit, blocks of a page only)
+ */
+static int tifs_discard(struct tifs *t, u64 ofs, u64 len)
+{
+	u32 *after, n, first, last, l, r;
+	bool *any;
+	int ret = 0;
+
+	if (!t->hdr->next || t->rbs != t->page)
+		return 0;
+	first = div_u64(ofs + t->rbs - 1, t->rbs);
+	last = div_u64(ofs + len, t->rbs);
+	after = kcalloc(t->nregions, sizeof(*after), GFP_KERNEL);
+	any = kcalloc(t->nregions, sizeof(*any), GFP_KERNEL);
+	if (!after || !any) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	for (n = first; n < last && n < t->nblocks; n++) {
+		l = t->blocks[n];
+		if (t->map[l] == FFX_NO_PAGE)
+			continue;
+		r = l / t->region_pages;
+		after[r] = max(after[r], t->map_pos[l]);
+		any[r] = true;
+		t->units[t->map[l] / t->unit_pages].live--;
+		t->map[l] = FFX_NO_PAGE;
+	}
+	for (r = 0; r < t->nregions && !ret; r++)
+		if (any[r])
+			ret = tifs_put_discards(t, r, after[r], 0);
+	if (!ret)
+		ret = tifs_compact_touched(t);
+out:
+	kfree(after);
+	kfree(any);
+	return ret;
 }
 
 static int tifs_file_io(struct tifs *t, u64 ofs, void *buf, size_t len, bool write)
@@ -1976,6 +2129,19 @@ static blk_status_t tifs_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_m
 	case REQ_OP_FLUSH:
 		blk_mq_end_request(rq, BLK_STS_OK);
 		return BLK_STS_OK;
+	case REQ_OP_DISCARD:
+		if (!t->writable) {
+			blk_mq_end_request(rq, BLK_STS_PROTECTION);
+			return BLK_STS_OK;
+		}
+		mutex_lock(&t->lock);
+		ret = pos + blk_rq_bytes(rq) > t->disk_size ? -EIO :
+		      tifs_discard(t, pos, blk_rq_bytes(rq));
+		mutex_unlock(&t->lock);
+		if (ret)
+			pr_err_ratelimited("discard at %llu: %d\n", pos, ret);
+		blk_mq_end_request(rq, errno_to_blk_status(ret));
+		return BLK_STS_OK;
 	default:
 		blk_mq_end_request(rq, BLK_STS_NOTSUPP);
 		return BLK_STS_OK;
@@ -2024,6 +2190,12 @@ static int tifs_add_disk(struct tifs *t)
 		.physical_block_size = t->page,
 		.max_hw_sectors = 64,
 	};
+
+	/* Discarding a page writes a record for its region (see tifs_discard) */
+	if (t->hdr->next && t->rbs == t->page) {
+		lim.max_hw_discard_sectors = UINT_MAX >> SECTOR_SHIFT;
+		lim.discard_granularity = t->rbs;
+	}
 	struct gendisk *disk;
 	int ret;
 
@@ -2078,6 +2250,10 @@ static void tifs_free(struct tifs *t)
 	vfree(t->map);
 	vfree(t->map_pos);
 	vfree(t->discard_list);
+	kfree(t->alloc_b3);
+	kfree(t->data_spare);
+	kfree(t->disc_spare);
+	kfree(t->touched);
 	vfree(t->units);
 	kfree(t->hdr_template);
 	kfree(t->hdr_spare);
