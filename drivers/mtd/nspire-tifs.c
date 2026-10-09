@@ -113,6 +113,12 @@ struct tifs_ecc {
 	unsigned int off[ECC_MAX_CODES];
 };
 
+struct rel_inode {
+	u32 block;
+	u64 size;
+	unsigned int mode;
+};
+
 struct tifs {
 	struct mtd_info *mtd;		/* the partition */
 	struct mtd_info *master;	/* written through: the partition is read-only */
@@ -135,6 +141,7 @@ struct tifs {
 
 	/* Reliance */
 	u32 rbs;			/* block size */
+	struct rel_inode index;		/* inode of the index file */
 	u32 *blocks;			/* the file's blocks */
 	u32 nblocks;
 	u64 file_size, disk_size;
@@ -610,12 +617,6 @@ static int tifs_read_logical(struct tifs *t, u64 ofs, void *buf, size_t len)
 
 #define REL_INODE_DATA	0x40
 
-struct rel_inode {
-	u32 block;
-	u64 size;
-	unsigned int mode;
-};
-
 static int rel_read_block(struct tifs *t, u32 block, void *buf, size_t len)
 {
 	if (len > t->rbs)
@@ -637,59 +638,77 @@ static int rel_get_inode(struct tifs *t, u32 block, struct rel_inode *ino, u8 *b
 	return 0;
 }
 
+static int rel_index_lookup(struct tifs *t, const struct rel_inode *index, u32 idx,
+			    u32 *block, u8 *buf);
+
+/*
+ * An indirect block (INDI, DBLI) into buf: it is named by its index, like
+ * an inode, through the index file. A real Touchpad's file points to
+ * indexes 867 and 868, next to its own inode's, while block 867 is free
+ * space holding other data.
+ */
+static int rel_get_node(struct tifs *t, u32 idx, const char *sig, u8 *buf)
+{
+	u32 block;
+	int ret = rel_index_lookup(t, &t->index, idx, &block, buf) ?:
+		  rel_read_block(t, block, buf, t->rbs);
+
+	if (ret)
+		return ret;
+	return memcmp(buf, sig, 4) ? -EUCLEAN : 0;
+}
+
 /*
  * Number of the data block holding byte n * rbs of an inode. Indirect
- * blocks (INDI, DBLI) have the inode's 0x40-byte header too: on a real
- * Touchpad, a file of 13096 blocks of 512 bytes is double indirect through
- * two pointers, as 112 pointers a block give 12544 blocks single indirect.
+ * blocks have the inode's 0x40-byte header too: on a real Touchpad, a
+ * file of 13096 blocks of 512 bytes is double indirect through two
+ * pointers, as 112 pointers a block give 12544 blocks single indirect.
+ * Data blocks are named by their number.
  */
 static int rel_data_block(struct tifs *t, const struct rel_inode *ino, u32 n,
 			  u8 *buf, u32 *block)
 {
-	u32 per_inode = (t->rbs - REL_INODE_DATA) / 4, per_block = per_inode;
+	u32 per = (t->rbs - REL_INODE_DATA) / 4;
 	u32 ptr;
 	int ret;
 
+	/* The index file's own indirect blocks would need itself */
+	if (ino->mode > 1 && ino->block == t->index.block)
+		return -EUCLEAN;
 	ret = rel_read_block(t, ino->block, buf, t->rbs);
 	if (ret)
 		return ret;
 
 	switch (ino->mode) {
 	case 1:
-		if (n >= per_inode)
+		if (n >= per)
 			return -EUCLEAN;
-		*block = get_unaligned_le32(buf + REL_INODE_DATA + 4 * n);
-		return 0;
+		break;
 	case 2:
-		if (n / per_block >= per_inode)
+		if (n / per >= per)
 			return -EUCLEAN;
-		ptr = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n / per_block));
-		ret = rel_read_block(t, ptr, buf, t->rbs);
+		ptr = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n / per));
+		ret = rel_get_node(t, ptr, "INDI", buf);
 		if (ret)
 			return ret;
-		if (memcmp(buf, "INDI", 4))
-			return -EUCLEAN;
-		*block = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n % per_block));
-		return 0;
+		break;
 	case 3:
-		if (n / per_block / per_block >= per_inode)
+		if (n / per / per >= per)
 			return -EUCLEAN;
-		ptr = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n / per_block / per_block));
-		ret = rel_read_block(t, ptr, buf, t->rbs);
+		ptr = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n / per / per));
+		ret = rel_get_node(t, ptr, "DBLI", buf);
 		if (ret)
 			return ret;
-		if (memcmp(buf, "DBLI", 4))
-			return -EUCLEAN;
-		ptr = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n / per_block % per_block));
-		ret = rel_read_block(t, ptr, buf, t->rbs);
+		ptr = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n / per % per));
+		ret = rel_get_node(t, ptr, "INDI", buf);
 		if (ret)
 			return ret;
-		if (memcmp(buf, "INDI", 4))
-			return -EUCLEAN;
-		*block = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n % per_block));
-		return 0;
+		break;
+	default:
+		return -EUCLEAN;
 	}
-	return -EUCLEAN;
+	*block = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n % per));
+	return 0;
 }
 
 static int rel_read_inode_data(struct tifs *t, const struct rel_inode *ino, u64 ofs,
@@ -871,69 +890,37 @@ static void tifs_dump(const char *what, const u8 *p, unsigned int len)
 }
 
 /*
- * Where the copies of a logical page are: every page of the partition
- * whose allocation info names its index, with the unit's sequence number
- * (- for a unit whose header is not valid), region and the info itself.
- */
-static void tifs_dump_copies(struct tifs *t, u32 logical)
-{
-	u32 index = logical % t->region_pages, u, p, shown = 0;
-
-	pr_err("page %u: map %d, region %u index %u\n", logical,
-	       t->map[logical] == FFX_NO_PAGE ? -1 : (int)t->map[logical],
-	       logical / t->region_pages, index);
-	for (u = 0; u < t->nunits && shown < 12; u++) {
-		const struct ffx_unit *unit = &t->units[u];
-		bool valid = unit->seq && unit->seq != U32_MAX;
-
-		for (p = 1; p < t->unit_pages && shown < 12; p++) {
-			u16 alloc;
-
-			if (tifs_raw_read(t, u * t->unit_pages + p, NULL, t->pspare))
-				return;
-			alloc = spare_alloc(t, t->pspare);
-			if (alloc == 0xffff || (alloc & FFX_ALLOC_INDEX) != index)
-				continue;
-			if (valid && unit->region != logical / t->region_pages)
-				continue;
-			pr_err("u%u p%u s%d r%d %04x %*phN\n", u, p,
-			       valid ? (int)unit->seq : -1, valid ? (int)unit->region : -1,
-			       alloc, 6, t->pspare);
-			shown++;
-		}
-	}
-	pr_err("copies shown: %u\n", shown);
-}
-
-/*
- * When a file's blocks cannot be found: its inode (header and the first
- * pointers), then the start of the block of its first pointer, and where
- * that block's page is.
+ * When a file's blocks cannot be found: its inode's header and first
+ * pointers, then down the chain of first pointers, each indirect block's
+ * index, block, signature and first pointers.
  */
 static void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u8 *buf)
 {
-	u32 ptr;
+	unsigned int level;
+	u32 idx, block;
 
 	pr_err("inode at block %u: mode %u, %llu bytes, blocks of %u\n", ino->block,
 	       ino->mode, ino->size, t->rbs);
 	if (rel_read_block(t, ino->block, buf, t->rbs))
 		return;
-	tifs_dump("i", buf, REL_INODE_DATA + 16);
-	ptr = get_unaligned_le32(buf + REL_INODE_DATA);
-	if ((u64)(ptr + 1) * t->rbs > (u64)t->logical_pages * t->page) {
-		pr_err("first pointer %u: past the volume\n", ptr);
-		return;
+	tifs_dump("i", buf, 8);
+	tifs_dump("ip", buf + REL_INODE_DATA, 16);
+	for (level = 1; level < ino->mode; level++) {
+		idx = get_unaligned_le32(buf + REL_INODE_DATA);
+		if (rel_index_lookup(t, &t->index, idx, &block, buf) ||
+		    rel_read_block(t, block, buf, t->rbs)) {
+			pr_err("index %u: not found\n", idx);
+			return;
+		}
+		pr_err("index %u: block %u\n", idx, block);
+		tifs_dump("n", buf, 8);
+		tifs_dump("np", buf + REL_INODE_DATA, 16);
 	}
-	if (rel_read_block(t, ptr, buf, t->rbs))
-		return;
-	pr_err("block %u:\n", ptr);
-	tifs_dump("b", buf, 32);
-	tifs_dump_copies(t, div_u64((u64)ptr * t->rbs, t->page));
 }
 
 static int tifs_find_file(struct tifs *t)
 {
-	struct rel_inode index, cur;
+	struct rel_inode *index = &t->index, cur;
 	u8 *buf = kmalloc(max_t(u32, t->rbs, 512), GFP_KERNEL);
 	u8 mast[0x30], meta[2][0x40];
 	const char *p = tifs_path;
@@ -980,13 +967,13 @@ static int tifs_find_file(struct tifs *t)
 		goto out;
 	}
 
-	ret = rel_get_inode(t, get_unaligned_le32(meta[best] + 8), &index, buf);
+	ret = rel_get_inode(t, get_unaligned_le32(meta[best] + 8), index, buf);
 	if (ret) {
 		pr_err("Reliance: index file inode (block %u): %d\n",
 		       get_unaligned_le32(meta[best] + 8), ret);
 		goto out;
 	}
-	ret = rel_index_lookup(t, &index, 2, &block, buf) ?:
+	ret = rel_index_lookup(t, index, 2, &block, buf) ?:
 	      rel_get_inode(t, block, &cur, buf);
 	if (ret) {
 		pr_err("Reliance: root directory: %d\n", ret);
@@ -1014,7 +1001,7 @@ static int tifs_find_file(struct tifs *t)
 			rel_dump_dir(t, &cur, buf);
 			goto out;
 		}
-		ret = rel_index_lookup(t, &index, idx, &block, buf) ?:
+		ret = rel_index_lookup(t, index, idx, &block, buf) ?:
 		      rel_get_inode(t, block, &cur, buf);
 		if (ret) {
 			pr_err("%s: %.*s: inode index %u, block %u: %d\n", tifs_path,
