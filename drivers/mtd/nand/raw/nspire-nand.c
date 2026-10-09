@@ -31,6 +31,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
+#include <linux/sizes.h>
 #include <linux/unaligned.h>
 
 #define NSPIRE_NAND_MAX_XFER		(2048 + 64)
@@ -73,6 +74,12 @@
 #define PHX_DMA_ADDR			0x28
 #define PHX_STATUS			0x34	/* runs READ STATUS */
 #define PHX_MAX_XFER			(512 + 16)
+/*
+ * On a real Touchpad, a page program also writes 4 KB of memory right
+ * after the data it moves to the chip (each byte four times over): the
+ * bounce buffer has room for it, else it lands in whatever comes next.
+ */
+#define PHX_PROGRAM_SPILL		SZ_4K
 
 #define NSPIRE_NAND_OP_TIMEOUT_US	(100 * USEC_PER_MSEC)
 
@@ -396,7 +403,7 @@ static int nspire_classic_exec(struct nand_chip *chip,
 static int nspire_classic_init(struct nspire_nand *nand,
 			       struct platform_device *pdev)
 {
-	nand->dma_buf = dmam_alloc_coherent(nand->dev, PHX_MAX_XFER,
+	nand->dma_buf = dmam_alloc_coherent(nand->dev, PHX_MAX_XFER + PHX_PROGRAM_SPILL,
 					    &nand->dma_addr, GFP_KERNEL);
 	if (!nand->dma_buf)
 		return -ENOMEM;
