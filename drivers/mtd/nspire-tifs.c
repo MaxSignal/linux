@@ -570,6 +570,7 @@ static int tifs_unit_unused(struct tifs *t, unsigned int u)
 	return 1;
 }
 
+#ifdef CONFIG_MTD_NSPIRE_TIFS_DEBUG
 /*
  * A unit FlashFX does not use the way this driver knows: its first page
  * (data and spare), then the spare of its second, 8 bytes each.
@@ -582,6 +583,9 @@ static void tifs_show_unit(struct tifs *t, unsigned int u, const char *why)
 	if (!tifs_raw_read(t, u * t->unit_pages + 1, NULL, t->pspare))
 		pr_warn("s1 %*phN\n", 8, t->pspare);
 }
+#else
+static inline void tifs_show_unit(struct tifs *t, unsigned int u, const char *why) { }
+#endif
 
 static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 {
@@ -686,8 +690,9 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 			    !spare_alloc_valid(t, t->pspare) ||
 			    (alloc & FFX_ALLOC_INDEX) >= t->region_pages) {
 				bad_status[alloc >> 12] += spare_alloc_valid(t, t->pspare);
-				if (bad_pages++ < 3)
+				if (IS_ENABLED(CONFIG_MTD_NSPIRE_TIFS_DEBUG) && bad_pages < 3)
 					pr_warn("unknown: u%u p%u %*phN\n", u, p, 8, t->pspare);
+				bad_pages++;
 				continue;
 			}
 			tifs_map_page(t, unit->region * t->region_pages + (alloc & FFX_ALLOC_INDEX),
@@ -715,7 +720,7 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 		pr_warn("%u units and %u pages in an unknown state\n", bad_units, bad_pages);
 		/* the unknown pages with a valid check, by allocation status */
 		for (u = 0; u < ARRAY_SIZE(bad_status); u++)
-			if (bad_status[u])
+			if (IS_ENABLED(CONFIG_MTD_NSPIRE_TIFS_DEBUG) && bad_status[u])
 				pr_warn("status %xxxx: %u pages\n", u, bad_status[u]);
 		t->ro_reason = "pages or units in an unknown state";
 	}
@@ -1053,6 +1058,7 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 	return ret < 0 ? ret : -ENOENT;
 }
 
+#ifdef CONFIG_MTD_NSPIRE_TIFS_DEBUG
 /*
  * When a lookup fails: the directory's entries, one a line (position,
  * attributes, inode index, name), and the bytes where the walk stopped.
@@ -1234,6 +1240,10 @@ static void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u32 n, u8
 		tifs_dump("np", buf + REL_INODE_DATA + 4 * (slot & ~1), 8);
 	}
 }
+#else
+static inline void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf) { }
+static inline void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u32 n, u8 *buf) { }
+#endif
 
 static int tifs_find_file(struct tifs *t)
 {
@@ -1462,6 +1472,7 @@ static bool unit_in_use(const struct ffx_unit *unit)
 	return unit->seq && unit->seq != U32_MAX;
 }
 
+#ifdef CONFIG_MTD_NSPIRE_TIFS_DEBUG
 /*
  * Room for writes: free units, pages free at the end of the units in use,
  * and stale pages (copies that are not the latest, discard records) in them
@@ -1482,6 +1493,9 @@ static void tifs_space_report(struct tifs *t)
 	pr_info("space: %d free units, %u in use: %u free pages, %u stale\n",
 		tifs_free_units(t), units, free_pages, stale);
 }
+#else
+static inline void tifs_space_report(struct tifs *t) { }
+#endif
 
 /* The unit taking new copies of a region's pages: its newest one */
 static unsigned int tifs_newest_unit(struct tifs *t, u32 region)
