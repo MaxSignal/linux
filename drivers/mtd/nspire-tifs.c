@@ -466,9 +466,23 @@ static void tifs_map_page(struct tifs *t, u32 logical, u32 phys, u32 seq)
 	t->units[phys / t->unit_pages].live++;
 }
 
+/*
+ * A unit FlashFX does not use the way this driver knows: its first page
+ * (data and spare), then the spare of its second, 8 bytes each.
+ */
+static void tifs_show_unit(struct tifs *t, unsigned int u, const char *why)
+{
+	pr_warn("unit %u: %s\n", u, why);
+	pr_warn("d %*phN\n", 8, t->pbuf);
+	pr_warn("s %*phN\n", 8, t->pspare);
+	if (!tifs_raw_read(t, u * t->unit_pages + 1, NULL, t->pspare))
+		pr_warn("s1 %*phN\n", 8, t->pspare);
+}
+
 static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 {
 	unsigned int u, p, regions = 0, seen = 0, bad_units = 0, bad_pages = 0;
+	unsigned int bad_status[16] = { };
 
 	t->units = vcalloc(t->nunits, sizeof(*t->units));
 	if (!t->units)
@@ -490,7 +504,8 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 		if (spare_alloc(t, t->pspare) != FFX_UNIT_MAGIC ||
 		    !tifs_hdr_valid(t->hdr, t->pbuf, t->page)) {
 			unit->seq = U32_MAX;
-			bad_units++;
+			if (bad_units++ < 2)
+				tifs_show_unit(t, u, "no header");
 			continue;
 		}
 		unit->seq = hdr_le32(t, t->pbuf, t->hdr->seq);
@@ -499,7 +514,8 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 		if (hdr_le32(t, t->pbuf, t->hdr->client) % (t->page * t->region_pages) ||
 		    !unit->seq || unit->seq == U32_MAX) {
 			unit->seq = U32_MAX;
-			bad_units++;
+			if (bad_units++ < 2)
+				tifs_show_unit(t, u, "client or sequence");
 			continue;
 		}
 		regions = max(regions, unit->region + 1);
@@ -546,7 +562,9 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 			if ((alloc & FFX_ALLOC_STATUS) != FFX_ALLOC_PAGE ||
 			    !spare_alloc_valid(t, t->pspare) ||
 			    (alloc & FFX_ALLOC_INDEX) >= t->region_pages) {
-				bad_pages++;
+				bad_status[alloc >> 12] += spare_alloc_valid(t, t->pspare);
+				if (bad_pages++ < 3)
+					pr_warn("unknown: u%u p%u %*phN\n", u, p, 8, t->pspare);
 				continue;
 			}
 			tifs_map_page(t, unit->region * t->region_pages + (alloc & FFX_ALLOC_INDEX),
@@ -570,6 +588,10 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 
 	if (bad_units || bad_pages) {
 		pr_warn("%u units and %u pages in an unknown state\n", bad_units, bad_pages);
+		/* the unknown pages with a valid check, by allocation status */
+		for (u = 0; u < ARRAY_SIZE(bad_status); u++)
+			if (bad_status[u])
+				pr_warn("status %xxxx: %u pages\n", u, bad_status[u]);
 		t->ro_reason = "pages or units in an unknown state";
 	}
 	return 0;
