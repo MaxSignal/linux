@@ -157,8 +157,7 @@ struct tifs {
 	u32 *map_pos;			/* when it was written: sequence, page */
 	u32 *discard_list;		/* the discard records, until applied */
 	unsigned int ndiscards;
-	s16 *alloc_b3;			/* byte 3 of the allocation info, per index */
-	u8 *data_spare, *disc_spare;	/* spare areas of a data page, a record */
+	u8 *disc_spare;			/* spare area of a discard record */
 	bool *touched;			/* regions written to since compacting */
 	u32 logical_pages;
 	u8 *hdr_template, *hdr_spare;	/* a valid unit header page */
@@ -652,12 +651,9 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 	t->map = vmalloc_array(t->logical_pages, sizeof(u32));
 	t->map_pos = vcalloc(t->logical_pages, sizeof(u32));
 	t->discard_list = vmalloc_array(t->nunits * (t->unit_pages - 1), sizeof(u32));
-	t->alloc_b3 = kmalloc_array(t->region_pages, sizeof(s16), GFP_KERNEL);
 	t->touched = kcalloc(regions, sizeof(bool), GFP_KERNEL);
-	if (!t->map || !t->map_pos || !t->discard_list || !t->alloc_b3 || !t->touched)
+	if (!t->map || !t->map_pos || !t->discard_list || !t->touched)
 		return -ENOMEM;
-	for (u = 0; u < t->region_pages; u++)
-		t->alloc_b3[u] = -1;
 	memset(t->map, 0xff, t->logical_pages * sizeof(u32));
 
 	*nsamples = 0;
@@ -696,11 +692,6 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 			}
 			tifs_map_page(t, unit->region * t->region_pages + (alloc & FFX_ALLOC_INDEX),
 				      phys, unit->seq);
-			/* what a new page of this index needs in its spare area */
-			if (t->alloc_off + 3 < t->oob)
-				t->alloc_b3[alloc & FFX_ALLOC_INDEX] = t->pspare[t->alloc_off + 3];
-			if (!t->data_spare)
-				t->data_spare = kmemdup(t->pspare, t->oob, GFP_KERNEL);
 			/*
 			 * Sample pages from all over the flash (reservoir
 			 * sampling): a big image file of zeros written in one
@@ -1680,8 +1671,7 @@ static int tifs_reclaim(struct tifs *t)
  * unit), and most of its regions hold data in nearly all their pages. The
  * order of copies is their unit's sequence number, then their page: a new
  * copy may go to the free pages of any unit of its region newer than the
- * one holding the copy it replaces (or the discard record that dropped
- * it), not only to the newest. A region short of free pages takes the unit
+ * one holding the copy it replaces, not only to the newest. A region short of free pages takes the unit
  * whose latest pages are the fewest and fit in newer units of its own
  * region, moves them there, erases it and gives it a header for itself;
  * after each write, a region left with less than a unit of free pages
@@ -1989,10 +1979,9 @@ static int tifs_alloc_page(struct tifs *t, u32 region, u32 *phys)
 static int tifs_write_logical_page(struct tifs *t, u32 logical, const u8 *data)
 {
 	u32 old = t->map[logical], phys, region = logical / t->region_pages;
-	u32 index = logical % t->region_pages;
 	int ret;
 
-	if (old == FFX_NO_PAGE && (!t->hdr->next || t->alloc_b3[index] < 0)) {
+	if (old == FFX_NO_PAGE) {
 		/* the loader wrote every page of the file */
 		pr_err_ratelimited("logical page %u was never written\n", logical);
 		return -EIO;
@@ -2007,19 +1996,10 @@ static int tifs_write_logical_page(struct tifs *t, u32 logical, const u8 *data)
 	/* the old copy may have moved while making room */
 	old = t->map[logical];
 
-	/* Spare area: the previous copy's, or one made for a discarded page */
-	if (old != FFX_NO_PAGE) {
-		ret = tifs_raw_read(t, old, NULL, t->wspare);
-		if (ret)
-			return ret;
-	} else {
-		u8 *a = t->wspare + t->alloc_off;
-
-		memcpy(t->wspare, t->data_spare, t->oob);
-		put_unaligned_le16(FFX_ALLOC_PAGE | index, a);
-		a[2] = ~(a[0] ^ a[1]);
-		a[3] = t->alloc_b3[index];
-	}
+	/* Spare area: the previous copy's, with this data's ECC */
+	ret = tifs_raw_read(t, old, NULL, t->wspare);
+	if (ret)
+		return ret;
 	tifs_ecc_place(t, data, t->wspare);
 
 	ret = tifs_write_checked(t, phys, data, t->wspare);
@@ -2028,47 +2008,6 @@ static int tifs_write_logical_page(struct tifs *t, u32 logical, const u8 *data)
 		return ret;	/* the page stays unused */
 	tifs_map_page(t, logical, phys, t->units[phys / t->unit_pages].seq);
 	return t->hdr->next ? tifs_compact_touched(t) : 0;
-}
-
-/*
- * Discard the pages of the file within [ofs, ofs + len): for each region,
- * a discard record (the layout with a next unit, blocks of a page only)
- */
-static int tifs_discard(struct tifs *t, u64 ofs, u64 len)
-{
-	u32 *after, n, first, last, l, r;
-	bool *any;
-	int ret = 0;
-
-	if (!t->hdr->next || t->rbs != t->page)
-		return 0;
-	first = div_u64(ofs + t->rbs - 1, t->rbs);
-	last = div_u64(ofs + len, t->rbs);
-	after = kcalloc(t->nregions, sizeof(*after), GFP_KERNEL);
-	any = kcalloc(t->nregions, sizeof(*any), GFP_KERNEL);
-	if (!after || !any) {
-		ret = -ENOMEM;
-		goto out;
-	}
-	for (n = first; n < last && n < t->nblocks; n++) {
-		l = t->blocks[n];
-		if (t->map[l] == FFX_NO_PAGE)
-			continue;
-		r = l / t->region_pages;
-		after[r] = max(after[r], t->map_pos[l]);
-		any[r] = true;
-		t->units[t->map[l] / t->unit_pages].live--;
-		t->map[l] = FFX_NO_PAGE;
-	}
-	for (r = 0; r < t->nregions && !ret; r++)
-		if (any[r])
-			ret = tifs_put_discards(t, r, after[r], 0);
-	if (!ret)
-		ret = tifs_compact_touched(t);
-out:
-	kfree(after);
-	kfree(any);
-	return ret;
 }
 
 static int tifs_file_io(struct tifs *t, u64 ofs, void *buf, size_t len, bool write)
@@ -2129,19 +2068,6 @@ static blk_status_t tifs_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_m
 	case REQ_OP_FLUSH:
 		blk_mq_end_request(rq, BLK_STS_OK);
 		return BLK_STS_OK;
-	case REQ_OP_DISCARD:
-		if (!t->writable) {
-			blk_mq_end_request(rq, BLK_STS_PROTECTION);
-			return BLK_STS_OK;
-		}
-		mutex_lock(&t->lock);
-		ret = pos + blk_rq_bytes(rq) > t->disk_size ? -EIO :
-		      tifs_discard(t, pos, blk_rq_bytes(rq));
-		mutex_unlock(&t->lock);
-		if (ret)
-			pr_err_ratelimited("discard at %llu: %d\n", pos, ret);
-		blk_mq_end_request(rq, errno_to_blk_status(ret));
-		return BLK_STS_OK;
 	default:
 		blk_mq_end_request(rq, BLK_STS_NOTSUPP);
 		return BLK_STS_OK;
@@ -2191,11 +2117,6 @@ static int tifs_add_disk(struct tifs *t)
 		.max_hw_sectors = 64,
 	};
 
-	/* Discarding a page writes a record for its region (see tifs_discard) */
-	if (t->hdr->next && t->rbs == t->page) {
-		lim.max_hw_discard_sectors = UINT_MAX >> SECTOR_SHIFT;
-		lim.discard_granularity = t->rbs;
-	}
 	struct gendisk *disk;
 	int ret;
 
@@ -2250,8 +2171,6 @@ static void tifs_free(struct tifs *t)
 	vfree(t->map);
 	vfree(t->map_pos);
 	vfree(t->discard_list);
-	kfree(t->alloc_b3);
-	kfree(t->data_spare);
 	kfree(t->disc_spare);
 	kfree(t->touched);
 	vfree(t->units);
