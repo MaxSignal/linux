@@ -1028,6 +1028,69 @@ static void tifs_dump(const char *what, const u8 *p, unsigned int len)
 }
 
 /*
+ * Every copy of a logical page on the flash, with its unit's sequence
+ * number and its first data bytes; '*' marks the one the map took, '!'
+ * one past the first free page of its unit (where the map does not look).
+ */
+static void tifs_dump_copies(struct tifs *t, u32 logical)
+{
+	u32 region = logical / t->region_pages, index = logical % t->region_pages, u, p;
+	unsigned int shown = 0;
+
+	pr_err("page %u (region %u index %u):\n", logical, region, index);
+	for (u = 0; u < t->nunits && shown < 8; u++) {
+		const struct ffx_unit *unit = &t->units[u];
+
+		if (!unit->seq || unit->seq == U32_MAX || unit->region != region)
+			continue;
+		/* all pages: also any past the first free one */
+		for (p = 1; p < t->unit_pages && shown < 8; p++) {
+			u32 phys = u * t->unit_pages + p;
+
+			if (tifs_raw_read(t, phys, t->pbuf, t->pspare) ||
+			    (spare_alloc(t, t->pspare) & FFX_ALLOC_STATUS) != FFX_ALLOC_PAGE ||
+			    (spare_alloc(t, t->pspare) & FFX_ALLOC_INDEX) != index)
+				continue;
+			pr_err("%c%cu%u p%u s%u %*phN\n", t->map[logical] == phys ? '*' : ' ',
+			       p >= unit->next_free ? '!' : ' ', u, p, unit->seq, 8, t->pbuf);
+			shown++;
+		}
+	}
+}
+
+/*
+ * Pages starting with an indirect block's header for idx, on the whole
+ * flash, whatever the map says: unit, page, unit sequence number and the
+ * logical page they hold.
+ */
+static void tifs_find_raw(struct tifs *t, u32 idx)
+{
+	unsigned int u, p, found = 0;
+
+	for (u = 0; u < t->nunits && found < 6; u++) {
+		const struct ffx_unit *unit = &t->units[u];
+
+		if (!unit->seq || unit->seq == U32_MAX)
+			continue;
+		for (p = 1; p < t->unit_pages && found < 6; p++) {
+			u32 phys = u * t->unit_pages + p;
+
+			if (tifs_raw_read(t, phys, t->pbuf, t->pspare))
+				continue;
+			if ((memcmp(t->pbuf, "INDI", 4) && memcmp(t->pbuf, "DBLI", 4)) ||
+			    get_unaligned_le32(t->pbuf + 4) != idx)
+				continue;
+			pr_err("raw %.4s %u: u%u p%u%s s%u page %u\n", t->pbuf, idx, u, p,
+			       p >= unit->next_free ? "!" : "", unit->seq,
+			       unit->region * t->region_pages +
+			       (spare_alloc(t, t->pspare) & FFX_ALLOC_INDEX));
+			found++;
+		}
+	}
+	pr_err("raw scan done: %u found\n", found);
+}
+
+/*
  * When the index file sends an index to a block that is not its indirect
  * block: the index file's entries around it, the two META blocks (start,
  * and where their last bytes in use are), and the blocks of the volume
@@ -1061,6 +1124,9 @@ static void rel_dump_index(struct tifs *t, u32 idx, u8 *buf)
 		}
 	}
 	pr_err("scan done: %u found\n", found);
+	if (v[2] != U32_MAX)
+		tifs_dump_copies(t, div_u64((u64)v[2] * t->rbs, t->page));
+	tifs_find_raw(t, idx);
 }
 
 /*
