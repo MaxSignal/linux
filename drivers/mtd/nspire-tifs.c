@@ -96,11 +96,17 @@ struct ffx_hdr_layout {
 	const char *name;
 	unsigned int client, erase, seq, block_size, total, client_blocks,
 		     per_region, checksum;
+	unsigned int units;	/* number of units FlashFX uses, 0: not known */
 };
 
 static const struct ffx_hdr_layout ffx_layouts[] = {
-	{ "Goplat", 0x10, 0x14, 0x1c, 0x2c, 0x32, 0x34, 0x2e, 0x38 },
-	{ "Hackspire", 0x10, 0x14, 0x1c, 0x2a, 0x30, 0x32, 0x2c, 0x36 },
+	{ "Goplat", 0x10, 0x14, 0x1c, 0x2c, 0x32, 0x34, 0x2e, 0x38, 0 },
+	/*
+	 * A real Touchpad: 937 at 0x20 in every header, and its FlashFX uses
+	 * units 0-936 of the 960 of the partition only, the last ones being
+	 * left out (spares?). The sequence number (0x1c) counts per region.
+	 */
+	{ "Hackspire", 0x10, 0x14, 0x1c, 0x2a, 0x30, 0x32, 0x2c, 0x36, 0x20 },
 };
 
 struct ffx_unit {
@@ -406,7 +412,7 @@ static bool tifs_hdr_valid(const struct ffx_hdr_layout *l, const u8 *h, unsigned
 static int tifs_find_layout(struct tifs *t)
 {
 	unsigned int eb_pages = t->mtd->erasesize / t->page;
-	unsigned int best = 0, best_hits = 0, off, b;
+	unsigned int best = 0, best_hits = 0, off, b, ffx_units = 0;
 	unsigned int hits[64] = { };
 
 	/* Unit headers start erase blocks: find where their 0x48E2 sits */
@@ -444,6 +450,8 @@ static int tifs_find_layout(struct tifs *t)
 			t->unit_pages = get_unaligned_le16(t->pbuf + l->total);
 			t->region_pages = get_unaligned_le16(t->pbuf + l->client_blocks) *
 					  get_unaligned_le16(t->pbuf + l->per_region);
+			if (l->units)
+				ffx_units = get_unaligned_le32(t->pbuf + l->units);
 			break;
 		}
 		if (t->hdr)
@@ -456,6 +464,9 @@ static int tifs_find_layout(struct tifs *t)
 	}
 
 	t->nunits = t->pages / t->unit_pages;
+	/* The units past those FlashFX uses are none of its business, nor ours */
+	if (ffx_units && ffx_units < t->nunits)
+		t->nunits = ffx_units;
 	pr_info("FlashFX: %u units of %u pages, regions of %u pages, %s header layout, allocation info at spare offset %u\n",
 		t->nunits, t->unit_pages, t->region_pages, t->hdr->name, t->alloc_off);
 	return 0;
