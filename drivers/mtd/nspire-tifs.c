@@ -797,13 +797,18 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 
 /*
  * When a lookup fails: the directory's entries, one a line (position,
- * attributes, inode index, name), and the bytes where the walk stopped.
+ * attributes, inode index, name), the bytes where the walk stopped, and
+ * all the bytes of the entry whose name begins the most like the one
+ * looked up.
  */
-static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
+static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, const char *want,
+			 size_t wantlen, u8 *buf)
 {
 	u8 e[REL_DIRENT_NAME + 2 * 24];
 	char name[25];
-	u64 pos = 0;
+	u64 pos = 0, near = 0;
+	size_t best = 0;
+	u32 nearlen = 0, off;
 
 	while (pos + REL_DIRENT_NAME <= dir->size) {
 		size_t n = min_t(u64, sizeof(e), dir->size - pos), i;
@@ -820,20 +825,24 @@ static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
 			    REL_DIRENT_NAME + 2 * i < n; i++)
 			name[i] = e[REL_DIRENT_NAME + 2 * i + 1] ? '?' : e[REL_DIRENT_NAME + 2 * i];
 		name[i] = '\0';
+		for (i = 0; i < wantlen && name[i] && tolower(name[i]) == tolower(want[i]); i++)
+			;
+		if (i > best) {
+			best = i;
+			near = pos;
+			nearlen = min_t(u32, len, sizeof(e));
+		}
 		pr_err("ent %03llx a%02x i%u %s\n", pos, e[REL_DIRENT_ATTR],
 		       get_unaligned_le32(e + REL_DIRENT_INDEX), name);
 		pos += len;
 	}
 	if (pos + 16 <= dir->size && !rel_read_inode_data(t, dir, pos, e, 16, buf))
 		pr_err("end %03llx: %*ph\n", pos, 16, e);
+	if (!best || rel_read_inode_data(t, dir, near, e, nearlen, buf))
+		return;
+	for (off = 0; off < nearlen; off += 8)
+		pr_err("%02x %*phN\n", off, min_t(u32, 8, nearlen - off), e + off);
 }
-
-/*
- * The paths are the TI-Nspire OS's (as linuxloader2 opens the image): its
- * /documents is the directory "document" in the root of the filesystem.
- */
-#define TI_DOCUMENTS		"documents"
-#define REL_DOCUMENTS		"document"
 
 static int tifs_find_file(struct tifs *t)
 {
@@ -842,7 +851,7 @@ static int tifs_find_file(struct tifs *t)
 	u8 mast[0x30], meta[2][0x40];
 	const char *p = tifs_path;
 	u32 meta_ptr[2], block;
-	bool is_dir = true, root;
+	bool is_dir = true;
 	int ret, best;
 	u32 i;
 
@@ -898,9 +907,8 @@ static int tifs_find_file(struct tifs *t)
 	}
 
 	/* Walk the path */
-	for (root = true; *p; root = false) {
-		const char *end, *name;
-		size_t namelen;
+	while (*p) {
+		const char *end;
 		u32 idx;
 
 		while (*p == '/')
@@ -912,17 +920,11 @@ static int tifs_find_file(struct tifs *t)
 			goto out;
 		}
 		end = strchrnul(p, '/');
-		name = p;
-		namelen = end - p;
-		if (root && namelen == strlen(TI_DOCUMENTS) && !memcmp(p, TI_DOCUMENTS, namelen)) {
-			name = REL_DOCUMENTS;
-			namelen = strlen(REL_DOCUMENTS);
-		}
-		ret = rel_dir_lookup(t, &cur, name, namelen, &idx, &is_dir, buf);
+		ret = rel_dir_lookup(t, &cur, p, end - p, &idx, &is_dir, buf);
 		if (ret) {
 			pr_err("%s: %.*s: %d in a directory of %llu bytes (mode %u)\n",
 			       tifs_path, (int)(end - p), p, ret, cur.size, cur.mode);
-			rel_dump_dir(t, &cur, buf);
+			rel_dump_dir(t, &cur, p, end - p, buf);
 			goto out;
 		}
 		ret = rel_index_lookup(t, &index, idx, &block, buf) ?:
