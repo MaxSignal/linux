@@ -855,6 +855,39 @@ static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
 		pr_err("end %03llx (%d): %*ph\n", pos, ret, REL_DIRENT_UNIT, hdr);
 }
 
+/* Bytes on the console, 8 a line to fit the calculator's screen */
+static void tifs_dump(const char *what, const u8 *p, unsigned int len)
+{
+	unsigned int off;
+
+	for (off = 0; off < len; off += 8)
+		pr_err("%s %02x %*phN\n", what, off, min(8U, len - off), p + off);
+}
+
+/*
+ * When a file's blocks cannot be found: its inode (header and the first
+ * pointers), then the start of the block of its first pointer.
+ */
+static void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u8 *buf)
+{
+	u32 ptr;
+
+	pr_err("inode at block %u: mode %u, %llu bytes, blocks of %u\n", ino->block,
+	       ino->mode, ino->size, t->rbs);
+	if (rel_read_block(t, ino->block, buf, t->rbs))
+		return;
+	tifs_dump("i", buf, REL_INODE_DATA + 16);
+	ptr = get_unaligned_le32(buf + REL_INODE_DATA);
+	if ((u64)(ptr + 1) * t->rbs > (u64)t->logical_pages * t->page) {
+		pr_err("first pointer %u: past the volume\n", ptr);
+		return;
+	}
+	if (rel_read_block(t, ptr, buf, t->rbs))
+		return;
+	pr_err("block %u:\n", ptr);
+	tifs_dump("b", buf, 32);
+}
+
 static int tifs_find_file(struct tifs *t)
 {
 	struct rel_inode index, cur;
@@ -966,6 +999,7 @@ static int tifs_find_file(struct tifs *t)
 			ret = -EUCLEAN;
 		if (ret) {
 			pr_err("%s: block %u of %u: %d\n", tifs_path, i, t->nblocks, ret);
+			rel_dump_file(t, &cur, buf);
 			goto out;
 		}
 	}
