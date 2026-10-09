@@ -415,7 +415,10 @@ static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 	if (priv->variant->external_bgr)
 		cntl &= ~CNTL_BGR;
 
-	/* Power sequence: first enable and chill */
+	/*
+	 * Power sequence: first enable and chill. A controller kept enabled
+	 * goes on running with the same settings written again.
+	 */
 	writel(cntl, priv->regs + priv->ctrl);
 
 	/*
@@ -461,8 +464,9 @@ static void pl111_display_disable(struct drm_simple_display_pipe *pipe)
 	if (priv->variant_display_disable)
 		priv->variant_display_disable(drm);
 
-	/* Disable */
-	writel(0, priv->regs + priv->ctrl);
+	/* Disable, unless the controller is to keep running */
+	if (!priv->variant->keep_enabled)
+		writel(0, priv->regs + priv->ctrl);
 
 	clk_disable_unprepare(priv->clk);
 }

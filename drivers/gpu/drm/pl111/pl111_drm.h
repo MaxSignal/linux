@@ -118,6 +118,9 @@ struct drm_minor;
  * @fb_depth: desired depth per pixel on the default framebuffer
  * @palette: the formats include DRM_FORMAT_C4 or C8, which use the palette
  *	(loaded from the CRTC gamma LUT)
+ * @keep_enabled: once enabled, the controller is never stopped, only the
+ *	panel powered down and up: the panel shows the picture shifted by
+ *	an amount that changes each time the controller starts
  */
 struct pl111_variant_data {
 	const char *name;
@@ -131,6 +134,7 @@ struct pl111_variant_data {
 	unsigned int nformats;
 	unsigned int fb_depth;
 	bool palette;
+	bool keep_enabled;
 };
 
 struct pl111_drm_dev_private {
