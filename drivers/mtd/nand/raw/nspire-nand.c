@@ -270,14 +270,36 @@ static void nspire_classic_set_writable(struct nspire_nand *nand, bool writable)
  * The controller cannot read data without issuing a command first, so
  * nand_soft_waitrdy() is out; it can however run READ STATUS by itself.
  */
+static int nspire_classic_run(struct nspire_nand *nand, u32 ctrl);
+
+/*
+ * Wait for the chip with READ STATUS commands of our own. Polling the
+ * status register the controller keeps (PHX_STATUS) is not enough: on a
+ * real Touchpad, reads issued right after a program or an erase returned
+ * the bounce buffer as it was (failing their ECC, or passing a read-back
+ * check they should not have), as if the chip were still busy.
+ */
 static int nspire_classic_waitrdy(struct nspire_nand *nand,
 				  unsigned int timeout_ms)
 {
-	u32 status;
+	u8 *status = nand->dma_buf;
+	unsigned int n;
+	int ret;
 
-	return readl_poll_timeout_atomic(nand->regs + PHX_STATUS, status,
-					 status & NAND_STATUS_READY, 1,
-					 timeout_ms * USEC_PER_MSEC);
+	for (n = 0; n <= timeout_ms * USEC_PER_MSEC / 2; n++) {
+		status[0] = 0;
+		writel(1, nand->regs + PHX_SIZE);
+		writel(nand->dma_addr, nand->regs + PHX_DMA_ADDR);
+		ret = nspire_classic_run(nand, FIELD_PREP(PHX_OP_CMD1, NAND_CMD_STATUS) |
+					 PHX_OP_DATA);
+		if (ret)
+			return ret;
+		if (status[0] & NAND_STATUS_READY)
+			return 0;
+		udelay(2);
+	}
+	dev_err(nand->dev, "the chip stayed busy\n");
+	return -ETIMEDOUT;
 }
 
 static int nspire_classic_run(struct nspire_nand *nand, u32 ctrl)
