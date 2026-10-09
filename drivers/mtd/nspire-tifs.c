@@ -461,8 +461,7 @@ static void tifs_map_page(struct tifs *t, u32 logical, u32 phys, u32 seq)
 
 static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 {
-	unsigned int u, p, regions = 0, seen = 0;
-	bool unknown = false;
+	unsigned int u, p, regions = 0, seen = 0, bad_units = 0, bad_pages = 0;
 
 	t->units = vcalloc(t->nunits, sizeof(*t->units));
 	if (!t->units)
@@ -484,7 +483,7 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 		if (spare_alloc(t, t->pspare) != FFX_UNIT_MAGIC ||
 		    !tifs_hdr_valid(t->hdr, t->pbuf, t->page)) {
 			unit->seq = U32_MAX;
-			unknown = true;
+			bad_units++;
 			continue;
 		}
 		unit->seq = hdr_le32(t, t->pbuf, t->hdr->seq);
@@ -493,7 +492,7 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 		if (hdr_le32(t, t->pbuf, t->hdr->client) % (t->page * t->region_pages) ||
 		    !unit->seq || unit->seq == U32_MAX) {
 			unit->seq = U32_MAX;
-			unknown = true;
+			bad_units++;
 			continue;
 		}
 		regions = max(regions, unit->region + 1);
@@ -540,7 +539,7 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 			if ((alloc & FFX_ALLOC_STATUS) != FFX_ALLOC_PAGE ||
 			    !spare_alloc_valid(t, t->pspare) ||
 			    (alloc & FFX_ALLOC_INDEX) >= t->region_pages) {
-				unknown = true;
+				bad_pages++;
 				continue;
 			}
 			tifs_map_page(t, unit->region * t->region_pages + (alloc & FFX_ALLOC_INDEX),
@@ -562,8 +561,10 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 		}
 	}
 
-	if (unknown)
+	if (bad_units || bad_pages) {
+		pr_warn("%u units and %u pages in an unknown state\n", bad_units, bad_pages);
 		t->ro_reason = "pages or units in an unknown state";
+	}
 	return 0;
 }
 
@@ -636,11 +637,16 @@ static int rel_get_inode(struct tifs *t, u32 block, struct rel_inode *ino, u8 *b
 	return 0;
 }
 
-/* Number of the data block holding byte n * rbs of an inode */
+/*
+ * Number of the data block holding byte n * rbs of an inode. Indirect
+ * blocks (INDI, DBLI) have the inode's 0x40-byte header too: on a real
+ * Touchpad, a file of 13096 blocks of 512 bytes is double indirect through
+ * two pointers, as 112 pointers a block give 12544 blocks single indirect.
+ */
 static int rel_data_block(struct tifs *t, const struct rel_inode *ino, u32 n,
 			  u8 *buf, u32 *block)
 {
-	u32 per_inode = (t->rbs - REL_INODE_DATA) / 4, per_block = (t->rbs - 4) / 4;
+	u32 per_inode = (t->rbs - REL_INODE_DATA) / 4, per_block = per_inode;
 	u32 ptr;
 	int ret;
 
@@ -663,7 +669,7 @@ static int rel_data_block(struct tifs *t, const struct rel_inode *ino, u32 n,
 			return ret;
 		if (memcmp(buf, "INDI", 4))
 			return -EUCLEAN;
-		*block = get_unaligned_le32(buf + 4 + 4 * (n % per_block));
+		*block = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n % per_block));
 		return 0;
 	case 3:
 		if (n / per_block / per_block >= per_inode)
@@ -674,13 +680,13 @@ static int rel_data_block(struct tifs *t, const struct rel_inode *ino, u32 n,
 			return ret;
 		if (memcmp(buf, "DBLI", 4))
 			return -EUCLEAN;
-		ptr = get_unaligned_le32(buf + 4 + 4 * (n / per_block % per_block));
+		ptr = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n / per_block % per_block));
 		ret = rel_read_block(t, ptr, buf, t->rbs);
 		if (ret)
 			return ret;
 		if (memcmp(buf, "INDI", 4))
 			return -EUCLEAN;
-		*block = get_unaligned_le32(buf + 4 + 4 * (n % per_block));
+		*block = get_unaligned_le32(buf + REL_INODE_DATA + 4 * (n % per_block));
 		return 0;
 	}
 	return -EUCLEAN;
@@ -865,8 +871,44 @@ static void tifs_dump(const char *what, const u8 *p, unsigned int len)
 }
 
 /*
+ * Where the copies of a logical page are: every page of the partition
+ * whose allocation info names its index, with the unit's sequence number
+ * (- for a unit whose header is not valid), region and the info itself.
+ */
+static void tifs_dump_copies(struct tifs *t, u32 logical)
+{
+	u32 index = logical % t->region_pages, u, p, shown = 0;
+
+	pr_err("page %u: map %d, region %u index %u\n", logical,
+	       t->map[logical] == FFX_NO_PAGE ? -1 : (int)t->map[logical],
+	       logical / t->region_pages, index);
+	for (u = 0; u < t->nunits && shown < 12; u++) {
+		const struct ffx_unit *unit = &t->units[u];
+		bool valid = unit->seq && unit->seq != U32_MAX;
+
+		for (p = 1; p < t->unit_pages && shown < 12; p++) {
+			u16 alloc;
+
+			if (tifs_raw_read(t, u * t->unit_pages + p, NULL, t->pspare))
+				return;
+			alloc = spare_alloc(t, t->pspare);
+			if (alloc == 0xffff || (alloc & FFX_ALLOC_INDEX) != index)
+				continue;
+			if (valid && unit->region != logical / t->region_pages)
+				continue;
+			pr_err("u%u p%u s%d r%d %04x %*phN\n", u, p,
+			       valid ? (int)unit->seq : -1, valid ? (int)unit->region : -1,
+			       alloc, 6, t->pspare);
+			shown++;
+		}
+	}
+	pr_err("copies shown: %u\n", shown);
+}
+
+/*
  * When a file's blocks cannot be found: its inode (header and the first
- * pointers), then the start of the block of its first pointer.
+ * pointers), then the start of the block of its first pointer, and where
+ * that block's page is.
  */
 static void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u8 *buf)
 {
@@ -886,6 +928,7 @@ static void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u8 *buf)
 		return;
 	pr_err("block %u:\n", ptr);
 	tifs_dump("b", buf, 32);
+	tifs_dump_copies(t, div_u64((u64)ptr * t->rbs, t->page));
 }
 
 static int tifs_find_file(struct tifs *t)
