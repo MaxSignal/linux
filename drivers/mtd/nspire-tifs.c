@@ -68,6 +68,12 @@ MODULE_PARM_DESC(write, "Allow writing when all safety checks pass (default: yes
 #define FFX_ALLOC_STATUS	0xf000
 #define FFX_ALLOC_INDEX		0x0fff
 #define FFX_NO_PAGE		U32_MAX
+/*
+ * Pages a real Touchpad's FlashFX writes with this allocation info (status
+ * 5, index 0xff0) here and there among data pages: not data pages, and
+ * not known otherwise, so kept as they are (their units are never erased).
+ */
+#define FFX_ALLOC_KEEP		0x5ff0
 
 /*
  * linuxloader2 starts every 4 KiB chunk of a new image with a tag:
@@ -103,6 +109,7 @@ struct ffx_unit {
 	u32 erase_count;
 	u16 next_free;		/* first free page, unit_pages when full */
 	u16 live;		/* pages holding the latest copy */
+	u16 keep;		/* FFX_ALLOC_KEEP pages: never erase the unit */
 };
 
 struct tifs_ecc {
@@ -470,6 +477,25 @@ static void tifs_map_page(struct tifs *t, u32 logical, u32 phys, u32 seq)
  * A unit FlashFX does not use the way this driver knows: its first page
  * (data and spare), then the spare of its second, 8 bytes each.
  */
+/*
+ * A unit without a valid header, as a real Touchpad's last one: 1 when no
+ * page after the first carries allocation info (no data page in it).
+ */
+static int tifs_unit_unused(struct tifs *t, unsigned int u)
+{
+	unsigned int p;
+	int ret;
+
+	for (p = 1; p < t->unit_pages; p++) {
+		ret = tifs_raw_read(t, u * t->unit_pages + p, NULL, t->wspare);
+		if (ret)
+			return ret;
+		if (spare_alloc(t, t->wspare) != 0xffff)
+			return 0;
+	}
+	return 1;
+}
+
 static void tifs_show_unit(struct tifs *t, unsigned int u, const char *why)
 {
 	pr_warn("unit %u: %s\n", u, why);
@@ -482,7 +508,8 @@ static void tifs_show_unit(struct tifs *t, unsigned int u, const char *why)
 static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 {
 	unsigned int u, p, regions = 0, seen = 0, bad_units = 0, bad_pages = 0;
-	unsigned int bad_status[16] = { };
+	unsigned int bad_status[16] = { }, foreign = 0, keep = 0;
+	int ret;
 
 	t->units = vcalloc(t->nunits, sizeof(*t->units));
 	if (!t->units)
@@ -504,6 +531,14 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 		if (spare_alloc(t, t->pspare) != FFX_UNIT_MAGIC ||
 		    !tifs_hdr_valid(t->hdr, t->pbuf, t->page)) {
 			unit->seq = U32_MAX;
+			ret = tifs_unit_unused(t, u);
+			if (ret < 0)
+				return ret;
+			if (ret) {
+				/* holds no data page: left alone */
+				foreign++;
+				continue;
+			}
 			if (bad_units++ < 2)
 				tifs_show_unit(t, u, "no header");
 			continue;
@@ -559,6 +594,11 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 				unit->next_free = p;
 				break;
 			}
+			if (alloc == FFX_ALLOC_KEEP && spare_alloc_valid(t, t->pspare)) {
+				unit->keep++;
+				keep++;
+				continue;
+			}
 			if ((alloc & FFX_ALLOC_STATUS) != FFX_ALLOC_PAGE ||
 			    !spare_alloc_valid(t, t->pspare) ||
 			    (alloc & FFX_ALLOC_INDEX) >= t->region_pages) {
@@ -586,6 +626,9 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 		}
 	}
 
+	if (foreign || keep)
+		pr_info("left alone: %u units without data pages or header, %u pages marked %04x\n",
+			foreign, keep, FFX_ALLOC_KEEP);
 	if (bad_units || bad_pages) {
 		pr_warn("%u units and %u pages in an unknown state\n", bad_units, bad_pages);
 		/* the unknown pages with a valid check, by allocation status */
@@ -1300,6 +1343,8 @@ static int tifs_move_live(struct tifs *t, unsigned int src, unsigned int dst)
 		ret = tifs_raw_read(t, phys, t->wbuf, t->wspare);
 		if (ret)
 			return ret;
+		if ((spare_alloc(t, t->wspare) & FFX_ALLOC_INDEX) >= t->region_pages)
+			continue;
 		logical = t->units[src].region * t->region_pages +
 			  (spare_alloc(t, t->wspare) & FFX_ALLOC_INDEX);
 		if (t->map[logical] != phys)
@@ -1326,7 +1371,8 @@ static int tifs_reclaim(struct tifs *t)
 
 	/* A unit without any latest copy can just go */
 	for (u = 0; u < t->nunits; u++) {
-		if (t->units[u].seq && t->units[u].seq != U32_MAX && !t->units[u].live)
+		if (t->units[u].seq && t->units[u].seq != U32_MAX && !t->units[u].live &&
+		    !t->units[u].keep)
 			return tifs_erase_unit(t, u);
 	}
 
@@ -1334,7 +1380,7 @@ static int tifs_reclaim(struct tifs *t)
 	for (u = 0; u < t->nunits; u++) {
 		struct ffx_unit *unit = &t->units[u];
 
-		if (!unit->seq || unit->seq == U32_MAX)
+		if (!unit->seq || unit->seq == U32_MAX || unit->keep)
 			continue;
 		cur = tifs_newest_unit(t, unit->region);
 		if (cur == u || t->unit_pages - t->units[cur].next_free < unit->live)
@@ -1352,9 +1398,9 @@ static int tifs_reclaim(struct tifs *t)
 		struct ffx_unit *unit = &t->units[u];
 		unsigned int stale;
 
-		if (!unit->seq || unit->seq == U32_MAX)
+		if (!unit->seq || unit->seq == U32_MAX || unit->keep)
 			continue;
-		stale = unit->next_free - 1 - unit->live;
+		stale = unit->next_free - 1 - unit->live - unit->keep;
 		if (stale > most) {
 			most = stale;
 			best = u;
