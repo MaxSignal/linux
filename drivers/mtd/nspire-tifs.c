@@ -711,6 +711,61 @@ static int rel_data_block(struct tifs *t, const struct rel_inode *ino, u32 n,
 	return 0;
 }
 
+/*
+ * All the data blocks of a file, walking its indirect blocks once: one
+ * index lookup an indirect block, not three reads a data block. *done
+ * tells how many were found when it fails.
+ */
+static int rel_file_blocks(struct tifs *t, const struct rel_inode *ino, u32 *blocks,
+			   u32 nblocks, u32 *done, u8 *buf)
+{
+	u32 per = (t->rbs - REL_INODE_DATA) / 4, i, j, k;
+	u32 *top, *mid;
+	int ret;
+
+	*done = 0;
+	if (ino->mode < 1 || ino->mode > 3)
+		return -EUCLEAN;
+	top = kmalloc_array(2 * per, sizeof(u32), GFP_KERNEL);
+	if (!top)
+		return -ENOMEM;
+	mid = top + per;
+	ret = rel_read_block(t, ino->block, buf, t->rbs);
+	if (ret)
+		goto out;
+	for (i = 0; i < per; i++)
+		top[i] = get_unaligned_le32(buf + REL_INODE_DATA + 4 * i);
+
+	for (i = 0; i < per && *done < nblocks; i++) {
+		if (ino->mode == 1) {
+			blocks[(*done)++] = top[i];
+			continue;
+		}
+		ret = rel_get_node(t, top[i], ino->mode == 3 ? "DBLI" : "INDI", buf);
+		if (ret)
+			goto out;
+		if (ino->mode == 2) {
+			for (k = 0; k < per && *done < nblocks; k++)
+				blocks[(*done)++] = get_unaligned_le32(buf + REL_INODE_DATA + 4 * k);
+			continue;
+		}
+		for (j = 0; j < per; j++)
+			mid[j] = get_unaligned_le32(buf + REL_INODE_DATA + 4 * j);
+		for (j = 0; j < per && *done < nblocks; j++) {
+			ret = rel_get_node(t, mid[j], "INDI", buf);
+			if (ret)
+				goto out;
+			for (k = 0; k < per && *done < nblocks; k++)
+				blocks[(*done)++] = get_unaligned_le32(buf + REL_INODE_DATA + 4 * k);
+		}
+	}
+	if (*done < nblocks)
+		ret = -EUCLEAN;
+out:
+	kfree(top);
+	return ret;
+}
+
 static int rel_read_inode_data(struct tifs *t, const struct rel_inode *ino, u64 ofs,
 			       void *out, size_t len, u8 *buf)
 {
@@ -1023,15 +1078,14 @@ static int tifs_find_file(struct tifs *t)
 		ret = -ENOMEM;
 		goto out;
 	}
-	for (i = 0; i < t->nblocks; i++) {
-		ret = rel_data_block(t, &cur, i, buf, &t->blocks[i]);
-		if (!ret && (u64)(t->blocks[i] + 1) * t->rbs > (u64)t->logical_pages * t->page)
+	ret = rel_file_blocks(t, &cur, t->blocks, t->nblocks, &i, buf);
+	for (; !ret && i < t->nblocks; i++)
+		if ((u64)(t->blocks[i] + 1) * t->rbs > (u64)t->logical_pages * t->page)
 			ret = -EUCLEAN;
-		if (ret) {
-			pr_err("%s: block %u of %u: %d\n", tifs_path, i, t->nblocks, ret);
-			rel_dump_file(t, &cur, buf);
-			goto out;
-		}
+	if (ret) {
+		pr_err("%s: block %u of %u: %d\n", tifs_path, i, t->nblocks, ret);
+		rel_dump_file(t, &cur, buf);
+		goto out;
 	}
 	pr_info("%s: %llu bytes in %u blocks of %u bytes\n", tifs_path, t->file_size,
 		t->nblocks, t->rbs);
