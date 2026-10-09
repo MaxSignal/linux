@@ -1026,31 +1026,39 @@ static void tifs_dump(const char *what, const u8 *p, unsigned int len)
 }
 
 /*
- * When a file's blocks cannot be found: its inode's header and first
- * pointers, then down the chain of first pointers, each indirect block's
- * index, block, signature and first pointers.
+ * When block n of a file cannot be found: its inode, then down the path to
+ * that block, each indirect block's index, where the index file puts it,
+ * its header and the pointer the path takes.
  */
-static void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u8 *buf)
+static void rel_dump_file(struct tifs *t, const struct rel_inode *ino, u32 n, u8 *buf)
 {
+	u32 per = (t->rbs - REL_INODE_DATA) / 4, idx, block, slot;
 	unsigned int level;
-	u32 idx, block;
+	int ret;
 
-	pr_err("inode at block %u: mode %u, %llu bytes, blocks of %u\n", ino->block,
-	       ino->mode, ino->size, t->rbs);
+	pr_err("inode at block %u: mode %u, %llu bytes, blocks of %u; index file %llu bytes\n",
+	       ino->block, ino->mode, ino->size, t->rbs, t->index.size);
 	if (rel_read_block(t, ino->block, buf, t->rbs))
 		return;
 	tifs_dump("i", buf, 8);
-	tifs_dump("ip", buf + REL_INODE_DATA, 16);
-	for (level = 1; level < ino->mode; level++) {
-		idx = get_unaligned_le32(buf + REL_INODE_DATA);
-		if (rel_index_lookup(t, &t->index, idx, &block, buf) ||
-		    rel_read_block(t, block, buf, t->rbs)) {
-			pr_err("index %u: not found\n", idx);
+	slot = ino->mode == 3 ? n / per / per : ino->mode == 2 ? n / per : n;
+	for (level = ino->mode; level > 1; level--) {
+		if (slot >= per)
+			return;
+		idx = get_unaligned_le32(buf + REL_INODE_DATA + 4 * slot);
+		pr_err("pointer %u: index %u\n", slot, idx);
+		ret = rel_index_lookup(t, &t->index, idx, &block, buf);
+		if (ret) {
+			pr_err("index %u: %d\n", idx, ret);
 			return;
 		}
-		pr_err("index %u: block %u\n", idx, block);
+		ret = rel_read_block(t, block, buf, t->rbs);
+		pr_err("index %u: block %u: %d\n", idx, block, ret);
+		if (ret)
+			return;
 		tifs_dump("n", buf, 8);
-		tifs_dump("np", buf + REL_INODE_DATA, 16);
+		slot = level == 3 ? n / per % per : n % per;
+		tifs_dump("np", buf + REL_INODE_DATA + 4 * (slot & ~1), 8);
 	}
 }
 
@@ -1160,12 +1168,17 @@ static int tifs_find_file(struct tifs *t)
 		goto out;
 	}
 	ret = rel_file_blocks(t, &cur, t->blocks, t->nblocks, &i, buf);
-	for (; !ret && i < t->nblocks; i++)
-		if ((u64)(t->blocks[i] + 1) * t->rbs > (u64)t->logical_pages * t->page)
+	if (!ret) {
+		/* every block within the volume */
+		for (i = 0; i < t->nblocks; i++)
+			if ((u64)(t->blocks[i] + 1) * t->rbs > (u64)t->logical_pages * t->page)
+				break;
+		if (i < t->nblocks)
 			ret = -EUCLEAN;
+	}
 	if (ret) {
 		pr_err("%s: block %u of %u: %d\n", tifs_path, i, t->nblocks, ret);
-		rel_dump_file(t, &cur, buf);
+		rel_dump_file(t, &cur, i, buf);
 		goto out;
 	}
 	pr_info("%s: %llu bytes in %u blocks of %u bytes\n", tifs_path, t->file_size,
