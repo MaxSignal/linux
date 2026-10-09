@@ -737,111 +737,122 @@ static int rel_index_lookup(struct tifs *t, const struct rel_inode *index, u32 i
 }
 
 /*
- * Directory entries, as on a real TI-Nspire: 0x80, a checksum (?), the
- * length of the entry (u32 at 3), the length of the name in bytes (u16 at
- * 7), attributes at 9, the inode index (u32 at 11), and the UTF-16 name at
- * 18.
+ * Directory entries, as on a real TI-Nspire: units of 16 bytes. The first
+ * holds 0x80, a checksum (?), the length of the entry (u32 at 3), the
+ * length of the name in bytes (u16 at 7), attributes at 9 and the inode
+ * index (u32 at 11). Each next unit starts with the number of units left
+ * (u16: 2, 1 for a name in two units), then holds 7 characters of the
+ * UTF-16 name.
  */
+#define REL_DIRENT_UNIT		16
 #define REL_DIRENT_LEN		3
 #define REL_DIRENT_NAMELEN	7
 #define REL_DIRENT_ATTR		9
 #define REL_DIRENT_ATTR_USED	BIT(0)
 #define REL_DIRENT_ATTR_DIR	BIT(1)
 #define REL_DIRENT_INDEX	11
-#define REL_DIRENT_NAME		18
+#define REL_DIRENT_NAME_SKIP	2
+#define REL_DIRENT_NAME_BYTES	(REL_DIRENT_UNIT - REL_DIRENT_NAME_SKIP)
+
+/*
+ * Read an entry's header (its first unit) and check its lengths; returns 1
+ * past the last entry.
+ */
+static int rel_dirent(struct tifs *t, const struct rel_inode *dir, u64 pos,
+		      u8 hdr[REL_DIRENT_UNIT], u32 *len, u16 *m, u8 *buf)
+{
+	int ret;
+
+	if (pos + REL_DIRENT_UNIT > dir->size)
+		return 1;
+	ret = rel_read_inode_data(t, dir, pos, hdr, REL_DIRENT_UNIT, buf);
+	if (ret)
+		return ret;
+	if (hdr[0] != 0x80)
+		return 1;
+	*len = get_unaligned_le32(hdr + REL_DIRENT_LEN);
+	*m = get_unaligned_le16(hdr + REL_DIRENT_NAMELEN);
+	if (*m % 2 || *m > 2 * NAME_MAX || *len > dir->size - pos ||
+	    *len < REL_DIRENT_UNIT * (1 + DIV_ROUND_UP(*m, REL_DIRENT_NAME_BYTES)))
+		return -EUCLEAN;
+	return 0;
+}
+
+/* The m bytes of an entry's UTF-16 name, out of the units after the first */
+static int rel_dirent_name(struct tifs *t, const struct rel_inode *dir, u64 pos, u16 m,
+			   u8 *wname, u8 *buf)
+{
+	u16 done, n;
+	int ret;
+
+	for (done = 0; done < m; done += n) {
+		n = min_t(u16, m - done, REL_DIRENT_NAME_BYTES);
+		ret = rel_read_inode_data(t, dir, pos + REL_DIRENT_UNIT *
+					  (1 + done / REL_DIRENT_NAME_BYTES) +
+					  REL_DIRENT_NAME_SKIP, wname + done, n, buf);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
 
 /* Look a name up in a directory; returns the inode index */
 static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const char *name,
 			  size_t namelen, u32 *idx, bool *is_dir, u8 *buf)
 {
-	u8 hdr[REL_DIRENT_NAME];
-	u64 pos = 0;
+	u8 hdr[REL_DIRENT_UNIT], wname[2 * NAME_MAX];
+	u64 pos;
+	u32 len;
+	u16 m;
 	int ret;
 
-	while (pos + sizeof(hdr) <= dir->size) {
-		u32 len;
-		u16 m;
+	for (pos = 0; !(ret = rel_dirent(t, dir, pos, hdr, &len, &m, buf)); pos += len) {
+		bool match = true;
 		size_t i;
 
-		ret = rel_read_inode_data(t, dir, pos, hdr, sizeof(hdr), buf);
+		if (!(hdr[REL_DIRENT_ATTR] & REL_DIRENT_ATTR_USED) || m != 2 * namelen)
+			continue;
+		ret = rel_dirent_name(t, dir, pos, m, wname, buf);
 		if (ret)
 			return ret;
-		if (hdr[0] != 0x80)
-			break;
-		len = get_unaligned_le32(hdr + REL_DIRENT_LEN);
-		m = get_unaligned_le16(hdr + REL_DIRENT_NAMELEN);
-		if (m % 2 || len < sizeof(hdr) + m || len > dir->size - pos)
-			return -EUCLEAN;
-
-		if ((hdr[REL_DIRENT_ATTR] & REL_DIRENT_ATTR_USED) && m == 2 * namelen) {
-			u8 wname[2 * NAME_MAX];
-			bool match = true;
-
-			if (m > sizeof(wname))
-				return -EUCLEAN;
-			ret = rel_read_inode_data(t, dir, pos + sizeof(hdr), wname, m, buf);
-			if (ret)
-				return ret;
-			for (i = 0; i < namelen && match; i++)
-				match = !wname[2 * i + 1] && tolower(wname[2 * i]) == tolower(name[i]);
-			if (match) {
-				*idx = get_unaligned_le32(hdr + REL_DIRENT_INDEX);
-				*is_dir = hdr[REL_DIRENT_ATTR] & REL_DIRENT_ATTR_DIR;
-				return 0;
-			}
+		for (i = 0; i < namelen && match; i++)
+			match = !wname[2 * i + 1] && tolower(wname[2 * i]) == tolower(name[i]);
+		if (match) {
+			*idx = get_unaligned_le32(hdr + REL_DIRENT_INDEX);
+			*is_dir = hdr[REL_DIRENT_ATTR] & REL_DIRENT_ATTR_DIR;
+			return 0;
 		}
-		pos += len;
 	}
-	return -ENOENT;
+	return ret < 0 ? ret : -ENOENT;
 }
 
 /*
  * When a lookup fails: the directory's entries, one a line (position,
- * attributes, inode index, name), the bytes where the walk stopped, and
- * all the bytes of the entry whose name begins the most like the one
- * looked up.
+ * attributes, inode index, name), and the bytes where the walk stopped.
  */
-static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, const char *want,
-			 size_t wantlen, u8 *buf)
+static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
 {
-	u8 e[REL_DIRENT_NAME + 2 * 24];
+	u8 hdr[REL_DIRENT_UNIT], wname[2 * 24];
 	char name[25];
-	u64 pos = 0, near = 0;
-	size_t best = 0;
-	u32 nearlen = 0, off;
+	u64 pos;
+	u32 len;
+	u16 m;
+	int ret;
 
-	while (pos + REL_DIRENT_NAME <= dir->size) {
-		size_t n = min_t(u64, sizeof(e), dir->size - pos), i;
-		u32 len;
-		u16 m;
+	for (pos = 0; !(ret = rel_dirent(t, dir, pos, hdr, &len, &m, buf)); pos += len) {
+		size_t i, n = min_t(size_t, m, sizeof(wname));
 
-		if (rel_read_inode_data(t, dir, pos, e, n, buf))
+		if (rel_dirent_name(t, dir, pos, n, wname, buf))
 			return;
-		len = get_unaligned_le32(e + REL_DIRENT_LEN);
-		m = get_unaligned_le16(e + REL_DIRENT_NAMELEN);
-		if (e[0] != 0x80 || len < REL_DIRENT_NAME || len > dir->size - pos)
-			break;
-		for (i = 0; i < m / 2 && i < sizeof(name) - 1 &&
-			    REL_DIRENT_NAME + 2 * i < n; i++)
-			name[i] = e[REL_DIRENT_NAME + 2 * i + 1] ? '?' : e[REL_DIRENT_NAME + 2 * i];
+		for (i = 0; i < n / 2; i++)
+			name[i] = wname[2 * i + 1] || !isprint(wname[2 * i]) ? '?' : wname[2 * i];
 		name[i] = '\0';
-		for (i = 0; i < wantlen && name[i] && tolower(name[i]) == tolower(want[i]); i++)
-			;
-		if (i > best) {
-			best = i;
-			near = pos;
-			nearlen = min_t(u32, len, sizeof(e));
-		}
-		pr_err("ent %03llx a%02x i%u %s\n", pos, e[REL_DIRENT_ATTR],
-		       get_unaligned_le32(e + REL_DIRENT_INDEX), name);
-		pos += len;
+		pr_err("ent %03llx a%02x i%u %s\n", pos, hdr[REL_DIRENT_ATTR],
+		       get_unaligned_le32(hdr + REL_DIRENT_INDEX), name);
 	}
-	if (pos + 16 <= dir->size && !rel_read_inode_data(t, dir, pos, e, 16, buf))
-		pr_err("end %03llx: %*ph\n", pos, 16, e);
-	if (!best || rel_read_inode_data(t, dir, near, e, nearlen, buf))
-		return;
-	for (off = 0; off < nearlen; off += 8)
-		pr_err("%02x %*phN\n", off, min_t(u32, 8, nearlen - off), e + off);
+	if (pos + REL_DIRENT_UNIT <= dir->size &&
+	    !rel_read_inode_data(t, dir, pos, hdr, REL_DIRENT_UNIT, buf))
+		pr_err("end %03llx (%d): %*ph\n", pos, ret, REL_DIRENT_UNIT, hdr);
 }
 
 static int tifs_find_file(struct tifs *t)
@@ -924,7 +935,7 @@ static int tifs_find_file(struct tifs *t)
 		if (ret) {
 			pr_err("%s: %.*s: %d in a directory of %llu bytes (mode %u)\n",
 			       tifs_path, (int)(end - p), p, ret, cur.size, cur.mode);
-			rel_dump_dir(t, &cur, p, end - p, buf);
+			rel_dump_dir(t, &cur, buf);
 			goto out;
 		}
 		ret = rel_index_lookup(t, &index, idx, &block, buf) ?:
