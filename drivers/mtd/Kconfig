@@ -228,6 +228,16 @@ config MTD_NSPIRE_TIFS
 	  filesystem metadata is never modified. Writing is only enabled when
 	  the on-flash formats match what the driver knows.
 
+config MTD_NSPIRE_TIFS_DEBUG
+	bool "TI-Nspire filesystem image: diagnostics"
+	depends on MTD_NSPIRE_TIFS
+	help
+	  Shows what the driver finds where it does not understand the
+	  filesystem: unknown units and pages, the entries of a directory a
+	  lookup fails in, the path to a block of the file that cannot be
+	  found, and the room left for writes. For looking into a calculator;
+	  say N otherwise.
+
 source "drivers/mtd/chips/Kconfig"
 
 source "drivers/mtd/maps/Kconfig"
