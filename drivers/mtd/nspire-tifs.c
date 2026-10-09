@@ -750,12 +750,6 @@ static int rel_index_lookup(struct tifs *t, const struct rel_inode *index, u32 i
 #define REL_DIRENT_INDEX	11
 #define REL_DIRENT_NAME		18
 
-/* Entries are whole 16-byte units, at least a header long */
-static bool rel_dirent_len_ok(u32 len, u64 left)
-{
-	return len >= REL_DIRENT_NAME && len % 16 == 0 && len <= left;
-}
-
 /* Look a name up in a directory; returns the inode index */
 static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const char *name,
 			  size_t namelen, u32 *idx, bool *is_dir, u8 *buf)
@@ -772,15 +766,10 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 		ret = rel_read_inode_data(t, dir, pos, hdr, sizeof(hdr), buf);
 		if (ret)
 			return ret;
+		if (hdr[0] != 0x80)
+			break;
 		len = get_unaligned_le32(hdr + REL_DIRENT_LEN);
 		m = get_unaligned_le16(hdr + REL_DIRENT_NAMELEN);
-		if (hdr[0] != 0x80) {
-			/* Not an entry in use (?): step over it if its length holds */
-			if (!rel_dirent_len_ok(len, dir->size - pos))
-				break;
-			pos += len;
-			continue;
-		}
 		if (m % 2 || len < sizeof(hdr) + m || len > dir->size - pos)
 			return -EUCLEAN;
 
@@ -808,16 +797,13 @@ static int rel_dir_lookup(struct tifs *t, const struct rel_inode *dir, const cha
 
 /*
  * When a lookup fails: the directory's entries, one a line (position,
- * attributes, inode index, name), the bytes where the walk stopped, and
- * those of the entry whose name begins the most like the one looked up.
+ * attributes, inode index, name), and the bytes where the walk stopped.
  */
-static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, const char *want,
-			 size_t wantlen, u8 *buf)
+static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, u8 *buf)
 {
 	u8 e[REL_DIRENT_NAME + 2 * 24];
 	char name[25];
-	u64 pos = 0, near = 0;
-	size_t best = 0;
+	u64 pos = 0;
 
 	while (pos + REL_DIRENT_NAME <= dir->size) {
 		size_t n = min_t(u64, sizeof(e), dir->size - pos), i;
@@ -828,28 +814,26 @@ static void rel_dump_dir(struct tifs *t, const struct rel_inode *dir, const char
 			return;
 		len = get_unaligned_le32(e + REL_DIRENT_LEN);
 		m = get_unaligned_le16(e + REL_DIRENT_NAMELEN);
-		if (!rel_dirent_len_ok(len, dir->size - pos))
+		if (e[0] != 0x80 || len < REL_DIRENT_NAME || len > dir->size - pos)
 			break;
 		for (i = 0; i < m / 2 && i < sizeof(name) - 1 &&
 			    REL_DIRENT_NAME + 2 * i < n; i++)
 			name[i] = e[REL_DIRENT_NAME + 2 * i + 1] ? '?' : e[REL_DIRENT_NAME + 2 * i];
 		name[i] = '\0';
-		for (i = 0; i < wantlen && name[i] && tolower(name[i]) == tolower(want[i]); i++)
-			;
-		if (i > best) {
-			best = i;
-			near = pos;
-		}
-		pr_err("ent %03llx %02x a%02x i%u %s\n", pos, e[0], e[REL_DIRENT_ATTR],
+		pr_err("ent %03llx a%02x i%u %s\n", pos, e[REL_DIRENT_ATTR],
 		       get_unaligned_le32(e + REL_DIRENT_INDEX), name);
 		pos += len;
 	}
 	if (pos + 16 <= dir->size && !rel_read_inode_data(t, dir, pos, e, 16, buf))
 		pr_err("end %03llx: %*ph\n", pos, 16, e);
-	if (best && !rel_read_inode_data(t, dir, near, e, min_t(u64, 48, dir->size - near), buf))
-		print_hex_dump(KERN_ERR, "near ", DUMP_PREFIX_OFFSET, 16, 1, e,
-			       min_t(u64, 48, dir->size - near), false);
 }
+
+/*
+ * The paths are the TI-Nspire OS's (as linuxloader2 opens the image): its
+ * /documents is the directory "document" in the root of the filesystem.
+ */
+#define TI_DOCUMENTS		"documents"
+#define REL_DOCUMENTS		"document"
 
 static int tifs_find_file(struct tifs *t)
 {
@@ -858,7 +842,7 @@ static int tifs_find_file(struct tifs *t)
 	u8 mast[0x30], meta[2][0x40];
 	const char *p = tifs_path;
 	u32 meta_ptr[2], block;
-	bool is_dir = true;
+	bool is_dir = true, root;
 	int ret, best;
 	u32 i;
 
@@ -914,8 +898,9 @@ static int tifs_find_file(struct tifs *t)
 	}
 
 	/* Walk the path */
-	while (*p) {
-		const char *end;
+	for (root = true; *p; root = false) {
+		const char *end, *name;
+		size_t namelen;
 		u32 idx;
 
 		while (*p == '/')
@@ -927,11 +912,17 @@ static int tifs_find_file(struct tifs *t)
 			goto out;
 		}
 		end = strchrnul(p, '/');
-		ret = rel_dir_lookup(t, &cur, p, end - p, &idx, &is_dir, buf);
+		name = p;
+		namelen = end - p;
+		if (root && namelen == strlen(TI_DOCUMENTS) && !memcmp(p, TI_DOCUMENTS, namelen)) {
+			name = REL_DOCUMENTS;
+			namelen = strlen(REL_DOCUMENTS);
+		}
+		ret = rel_dir_lookup(t, &cur, name, namelen, &idx, &is_dir, buf);
 		if (ret) {
 			pr_err("%s: %.*s: %d in a directory of %llu bytes (mode %u)\n",
 			       tifs_path, (int)(end - p), p, ret, cur.size, cur.mode);
-			rel_dump_dir(t, &cur, p, end - p, buf);
+			rel_dump_dir(t, &cur, buf);
 			goto out;
 		}
 		ret = rel_index_lookup(t, &index, idx, &block, buf) ?:
