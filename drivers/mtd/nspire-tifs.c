@@ -145,6 +145,7 @@ struct tifs {
 	struct tifs_ecc ecc;
 	bool writable;
 	const char *ro_reason;
+	bool space_reported;		/* once, when reclaiming finds no room */
 
 	/* Reliance */
 	u32 rbs;			/* block size */
@@ -496,6 +497,20 @@ static int tifs_unit_unused(struct tifs *t, unsigned int u)
 	return 1;
 }
 
+/* The first FFX_ALLOC_KEEP page: its data's start and its spare area */
+static void tifs_show_keep(struct tifs *t, unsigned int u, unsigned int p)
+{
+	unsigned int off;
+
+	if (tifs_raw_read(t, u * t->unit_pages + p, t->pbuf, t->pspare))
+		return;
+	pr_info("%04x page: u%u p%u\n", FFX_ALLOC_KEEP, u, p);
+	for (off = 0; off < 32; off += 8)
+		pr_info("kd %02x %*phN\n", off, 8, t->pbuf + off);
+	for (off = 0; off < min(16U, t->oob); off += 8)
+		pr_info("ks %02x %*phN\n", off, 8, t->pspare + off);
+}
+
 static void tifs_show_unit(struct tifs *t, unsigned int u, const char *why)
 {
 	pr_warn("unit %u: %s\n", u, why);
@@ -595,8 +610,9 @@ static int tifs_scan(struct tifs *t, u32 *samples, unsigned int *nsamples)
 				break;
 			}
 			if (alloc == FFX_ALLOC_KEEP && spare_alloc_valid(t, t->pspare)) {
+				if (!keep++)
+					tifs_show_keep(t, u, p);
 				unit->keep++;
-				keep++;
 				continue;
 			}
 			if ((alloc & FFX_ALLOC_STATUS) != FFX_ALLOC_PAGE ||
@@ -1252,6 +1268,38 @@ static int tifs_free_units(struct tifs *t)
 	return n;
 }
 
+/*
+ * Room for writes: free units; pages free at the end of units; stale pages
+ * (copies that are not the latest) in units reclaiming may erase, and in
+ * the units holding FFX_ALLOC_KEEP pages, which it does not.
+ */
+static void tifs_space_report(struct tifs *t)
+{
+	unsigned int u, units = 0, free_pages = 0, stale = 0, kunits = 0, kstale = 0, klive = 0;
+
+	for (u = 0; u < t->nunits; u++) {
+		const struct ffx_unit *unit = &t->units[u];
+		unsigned int s;
+
+		if (!unit->seq || unit->seq == U32_MAX)
+			continue;
+		units++;
+		free_pages += t->unit_pages - unit->next_free;
+		s = unit->next_free - 1 - unit->live - unit->keep;
+		if (unit->keep) {
+			kunits++;
+			kstale += s;
+			klive += unit->live;
+		} else {
+			stale += s;
+		}
+	}
+	pr_info("space: %d free units, %u in use, %u free pages in them\n",
+		tifs_free_units(t), units, free_pages);
+	pr_info("space: %u stale pages to reclaim; %u units with %04x pages: %u stale, %u live\n",
+		stale, kunits, FFX_ALLOC_KEEP, kstale, klive);
+}
+
 /* Start a new unit for a region, with the highest sequence number */
 static int tifs_new_unit(struct tifs *t, u32 region, u32 *unit_out)
 {
@@ -1407,7 +1455,11 @@ static int tifs_reclaim(struct tifs *t)
 		}
 	}
 	if (best == t->nunits) {
-		pr_err_ratelimited("FlashFX: no space left to reclaim\n");
+		if (!t->space_reported) {
+			pr_err("FlashFX: no space left to reclaim\n");
+			tifs_space_report(t);
+			t->space_reported = true;
+		}
 		return -ENOSPC;
 	}
 	ret = tifs_new_unit(t, t->units[best].region, &cur);
@@ -1723,6 +1775,7 @@ static void tifs_attach(struct work_struct *work)
 		pr_info("read-write, %d free units\n", tifs_free_units(t));
 	else
 		pr_warn("read-only: %s\n", t->ro_reason);
+	tifs_space_report(t);
 
 	ret = tifs_add_disk(t);
 	if (ret)
