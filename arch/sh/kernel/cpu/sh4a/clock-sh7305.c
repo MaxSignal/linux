@@ -9,6 +9,8 @@
  * community documentation of the Casio fx-CG/fx-9860GIII calculators
  * (gint, and the fx-9750GIII Linux port by Artem Novak).
  */
+#include <linux/clkdev.h>
+#include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/io.h>
@@ -18,6 +20,18 @@
 #define FRQCRA		0xa4150000
 #define PLLCR		0xa4150024
 #define FLLFRQ		0xa4150050
+
+#define USBCLKCR	0xa4150014
+#define MSTPCR2		0xa4150038
+#define MSELCRA		0xa4050180
+#define MSELCRB		0xa4050182
+#define UPONCR		0xa40501d4
+#define USB_SYSCFG	0xa4d80000
+#define USB_REG_C2	0xa4d800c2
+
+#define USBCLKCR_CLKSTP	(1 << 8)
+#define MSTP_USB0	(1 << 20)
+#define SYSCFG_SCKE	(1 << 10)
 
 #define PLLCR_PLLE	(1 << 14)
 #define PLLCR_FLLE	(1 << 12)
@@ -88,6 +102,52 @@ static struct sh_clk_ops *sh7305_clk_ops[] = {
 	&sh7305_cpu_clk_ops,
 };
 
+/*
+ * USB0: the function controller (r8a66597 compatible). Its clock, module
+ * stop bit, pin function and power control are only known from the
+ * calculator community (gint); the Casio OS uses this same sequence.
+ */
+static int usb0_clk_enable(struct clk *clk)
+{
+	__raw_writew(__raw_readw(MSELCRA) & ~0x00c0, MSELCRA);
+	__raw_writew(__raw_readw(MSELCRB) & ~0xc000, MSELCRB);
+	__raw_writel(__raw_readl(USBCLKCR) & ~USBCLKCR_CLKSTP, USBCLKCR);
+	mdelay(1);
+	__raw_writel(__raw_readl(MSTPCR2) & ~MSTP_USB0, MSTPCR2);
+	__raw_writew(0x0600, UPONCR);
+
+	/* SCKE gates every other register of the module */
+	__raw_writew(__raw_readw(USB_SYSCFG) | SYSCFG_SCKE, USB_SYSCFG);
+	udelay(1);
+	__raw_writew(0x0020, USB_REG_C2);
+	return 0;
+}
+
+static void usb0_clk_disable(struct clk *clk)
+{
+	__raw_writew(0, UPONCR);
+	mdelay(1);
+	__raw_writel(__raw_readl(MSTPCR2) | MSTP_USB0, MSTPCR2);
+	__raw_writel(__raw_readl(USBCLKCR) | USBCLKCR_CLKSTP, USBCLKCR);
+	mdelay(1);
+	/* what the Casio OS leaves when USB is off */
+	__raw_writew(__raw_readw(MSELCRB) | 0xc000, MSELCRB);
+	__raw_writew(__raw_readw(MSELCRA) | 0x0040, MSELCRA);
+}
+
+static struct sh_clk_ops usb0_clk_ops = {
+	.enable		= usb0_clk_enable,
+	.disable	= usb0_clk_disable,
+};
+
+static struct clk usb0_clk = {
+	.ops		= &usb0_clk_ops,
+};
+
+static struct clk_lookup sh7305_lookups[] = {
+	CLKDEV_CON_ID("usb0", &usb0_clk),
+};
+
 void __init arch_init_clk_ops(struct sh_clk_ops **ops, int idx)
 {
 	if (idx < ARRAY_SIZE(sh7305_clk_ops))
@@ -96,5 +156,9 @@ void __init arch_init_clk_ops(struct sh_clk_ops **ops, int idx)
 
 int __init arch_clk_init(void)
 {
-	return cpg_clk_init();
+	int ret = cpg_clk_init();
+
+	ret |= clk_register(&usb0_clk);
+	clkdev_add_table(sh7305_lookups, ARRAY_SIZE(sh7305_lookups));
+	return ret;
 }

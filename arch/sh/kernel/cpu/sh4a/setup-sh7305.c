@@ -14,6 +14,7 @@
 #include <linux/sh_timer.h>
 #include <linux/sh_intc.h>
 #include <linux/irq.h>
+#include <linux/usb/r8a66597.h>
 #include <asm/hw_irq.h>
 #include <asm/platform_early.h>
 
@@ -42,8 +43,31 @@ static struct platform_device tmu0_device = {
 	.num_resources	= ARRAY_SIZE(tmu0_resources),
 };
 
+/* USB 2.0 function controller, r8a66597 compatible (clock "usb0") */
+static struct r8a66597_platdata usb0_platform_data = {
+	.on_chip	= 1,
+	.endian		= 1,		/* big-endian FIFO access */
+	.buswait	= 5,		/* what gint uses */
+};
+
+static struct resource usb0_resources[] = {
+	DEFINE_RES_MEM(0xa4d80000, 0x100),
+	DEFINE_RES_IRQ(evt2irq(0xa20)),
+};
+
+static struct platform_device usb0_device = {
+	.name		= "r8a66597_udc",
+	.id		= 0,
+	.dev = {
+		.platform_data	= &usb0_platform_data,
+	},
+	.resource	= usb0_resources,
+	.num_resources	= ARRAY_SIZE(usb0_resources),
+};
+
 static struct platform_device *sh7305_devices[] __initdata = {
 	&tmu0_device,
+	&usb0_device,
 };
 
 static int __init sh7305_devices_setup(void)
@@ -71,21 +95,27 @@ enum {
 
 	/* interrupt sources */
 	TMU0_TUNI0, TMU0_TUNI1, TMU0_TUNI2,
+	USB0,
 };
 
 static struct intc_vect vectors[] __initdata = {
 	INTC_VECT(TMU0_TUNI0, 0x400), INTC_VECT(TMU0_TUNI1, 0x420),
 	INTC_VECT(TMU0_TUNI2, 0x440),
+	INTC_VECT(USB0, 0xa20),
 };
 
 static struct intc_mask_reg mask_registers[] __initdata = {
 	{ 0xa4080090, 0xa40800d0, 8, /* IMR4 / IMCR4 */
 	  { 0, TMU0_TUNI2, TMU0_TUNI1, TMU0_TUNI0, 0, 0, 0, 0 } },
+	{ 0xa40800a4, 0xa40800e4, 8, /* IMR9 / IMCR9 */
+	  { 0, 0, 0, 0, 0, 0, USB0, 0 } },
 };
 
 static struct intc_prio_reg prio_registers[] __initdata = {
 	{ 0xa4080000, 0, 16, 4, /* IPRA */
 	  { TMU0_TUNI0, TMU0_TUNI1, TMU0_TUNI2, 0 } },
+	{ 0xa4080014, 0, 16, 4, /* IPRF */
+	  { 0, 0, USB0, 0 } },
 };
 
 static DECLARE_INTC_DESC(intc_desc, "sh7305", vectors, NULL,
