@@ -21,7 +21,8 @@
 /* Register definitions */
 #elif	defined(CONFIG_CPU_SUBTYPE_SH7722) || \
 	defined(CONFIG_CPU_SUBTYPE_SH7723) || \
-	defined(CONFIG_CPU_SUBTYPE_SH7724)
+	defined(CONFIG_CPU_SUBTYPE_SH7724) || \
+	defined(CONFIG_CPU_SUBTYPE_SH7305)
 #define WTCNT		0xa4520000
 #define WTCSR		0xa4520004
 #else
