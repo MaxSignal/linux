@@ -23,7 +23,7 @@ SECTIONS
 	_text = .;		/* Text and read-only data */
 
 	.empty_zero_page : AT(ADDR(.empty_zero_page)) {
-		*(.empty_zero_page)
+		KEEP(*(.empty_zero_page))
 	} = 0
 
 	.text : AT(ADDR(.text)) {
@@ -56,7 +56,7 @@ SECTIONS
 	. = ALIGN(4);
 	.machvec.init : AT(ADDR(.machvec.init)) {
 		__machvec_start = .;
-		*(.machvec.init)
+		KEEP(*(.machvec.init))
 		__machvec_end = .;
 	}
 
