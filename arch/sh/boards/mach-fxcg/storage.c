@@ -32,12 +32,14 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/minmax.h>
+#include <linux/mutex.h>
 #include <linux/uio.h>
 #include <linux/slab.h>
 #include <linux/statfs.h>
 #include <linux/string.h>
 #include <linux/time.h>
 #include <linux/unaligned.h>
+#include <mach/fxcg.h>
 
 /* ---------------------------------------------- flash translation layer */
 
@@ -146,7 +148,6 @@ static struct fls_volume {
 	unsigned int spc;		/* sectors per cluster */
 	unsigned int root_sectors;
 	unsigned int clusters;		/* data clusters */
-	struct mutex lock;		/* chains and directory walks */
 } vol;
 
 struct fls_inode {
@@ -381,7 +382,7 @@ static ssize_t fls_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	ssize_t done = 0;
 	int ret;
 
-	mutex_lock(&vol.lock);
+	mutex_lock(&fxcg_flash_lock);
 	ret = fls_chain(fi);
 	while (!ret && iov_iter_count(to) && pos < size) {
 		u32 sec = fls_bmap(fi, pos / 512);
@@ -401,7 +402,7 @@ static ssize_t fls_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		pos += n;
 		done += n;
 	}
-	mutex_unlock(&vol.lock);
+	mutex_unlock(&fxcg_flash_lock);
 	iocb->ki_pos = pos;
 	return done ?: ret;
 }
@@ -448,9 +449,9 @@ static struct dentry *fls_lookup(struct inode *dir, struct dentry *dentry,
 		return ERR_PTR(-ENOMEM);
 	f->name = &dentry->d_name;
 	f->hit = false;
-	mutex_lock(&vol.lock);
+	mutex_lock(&fxcg_flash_lock);
 	ret = fls_walk(FLS_I(dir), &pos, fls_match, f);
-	mutex_unlock(&vol.lock);
+	mutex_unlock(&fxcg_flash_lock);
 	if (ret)
 		return ERR_PTR(ret);
 	if (f->hit)
@@ -472,9 +473,9 @@ static int fls_readdir(struct file *file, struct dir_context *ctx)
 	if (!dir_emit_dots(file, ctx))
 		return 0;
 	pos = ctx->pos - 2;
-	mutex_lock(&vol.lock);
+	mutex_lock(&fxcg_flash_lock);
 	ret = fls_walk(FLS_I(file_inode(file)), &pos, fls_emit, ctx);
-	mutex_unlock(&vol.lock);
+	mutex_unlock(&fxcg_flash_lock);
 	ctx->pos = pos + 2;
 	return ret;
 }
@@ -513,10 +514,10 @@ static int fls_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	unsigned int c, free = 0;
 
-	mutex_lock(&vol.lock);
+	mutex_lock(&fxcg_flash_lock);
 	for (c = 2; c < vol.clusters + 2; c++)
 		free += fat_entry(c) == 0;
-	mutex_unlock(&vol.lock);
+	mutex_unlock(&fxcg_flash_lock);
 	buf->f_type = FLS_MAGIC;
 	buf->f_bsize = vol.spc * 512;
 	buf->f_blocks = vol.clusters;
@@ -568,15 +569,17 @@ static int fls_fill_super(struct super_block *sb, struct fs_context *fc)
 	int ret;
 
 	if (!page_map) {
-		mutex_init(&vol.lock);
+		mutex_lock(&fxcg_flash_lock);
 		ret = build_page_map();
 		if (!ret)
 			ret = fls_read_volume();
 		if (ret) {
 			kfree(page_map);
 			page_map = NULL;
-			return ret;
 		}
+		mutex_unlock(&fxcg_flash_lock);
+		if (ret)
+			return ret;
 	}
 	sb->s_flags |= SB_RDONLY | SB_NOATIME;
 	sb->s_magic = FLS_MAGIC;

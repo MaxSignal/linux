@@ -387,6 +387,28 @@ config FXCG_STORAGE
 	  NOR flash through the Casio OS's own flash translation layer
 	  format ("mount -t fls fls /mnt/fls"). The flash is never written.
 
+config FXCG_XIP_ROMFS
+	bool "Root file system in place in the flash"
+	depends on SH_FXCG && XIP_KERNEL && MTD_PHYSMAP && MTD_ROM
+	select CRC32
+	help
+	  With the kernel running in place from the NOR flash, make the
+	  romfs image packed below it (found through the header at the end
+	  of the free flash, before 0xb40000) the first MTD device, a ROM,
+	  so that programs also run straight from the flash:
+	  "root=mtd0 rootfstype=romfs".
+
+config FXCG_XIP_INSTALL
+	bool "Installer for the kernel that runs in place"
+	depends on SH_FXCG && !XIP_KERNEL
+	select CRC32
+	help
+	  /dev/xipflash: writing linux-xip.bin to it ("cat linux-xip.bin >
+	  /dev/xipflash") puts the kernel that runs in place and its romfs
+	  in the free flash below 0xb40000, where the loader finds them.
+	  Only sectors that are erased or hold the previous such image are
+	  ever erased; closing the file checks the result.
+
 config FXCG_DEBUG_MARKERS
 	bool "Show the boot progress on the LCD"
 	depends on SH_FXCG
