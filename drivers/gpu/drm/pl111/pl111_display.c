@@ -16,6 +16,7 @@
 #include <linux/of_graph.h>
 
 #include <drm/drm_color_mgmt.h>
+#include <drm/drm_damage_helper.h>
 #include <drm/drm_fb_dma_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
@@ -178,21 +179,16 @@ static void pl111_load_palette(struct pl111_drm_dev_private *priv,
 	}
 }
 
-static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
-				 struct drm_crtc_state *cstate,
-				 struct drm_plane_state *plane_state)
+/* The timings of the mode, and the panel clock */
+static void pl111_display_timings(struct pl111_drm_dev_private *priv,
+				  struct drm_crtc_state *cstate)
 {
-	struct drm_crtc *crtc = &pipe->crtc;
-	struct drm_plane *plane = &pipe->plane;
-	struct drm_device *drm = crtc->dev;
-	struct pl111_drm_dev_private *priv = drm->dev_private;
+	struct drm_device *drm = priv->drm;
 	const struct drm_display_mode *mode = &cstate->mode;
-	struct drm_framebuffer *fb = plane->state->fb;
 	struct drm_connector *connector = priv->connector;
 	struct drm_bridge *bridge = priv->bridge;
 	bool grayscale = pl111_panel_is_grayscale(priv);
 	unsigned long rate;
-	u32 cntl;
 	u32 ppl, hsw, hfp, hbp;
 	u32 lpp, vsw, vfp, vbp;
 	u32 cpl, tim2;
@@ -301,6 +297,38 @@ static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
 	spin_unlock(&priv->tim2_lock);
 
 	writel(0, priv->regs + CLCD_TIM3);
+}
+
+/*
+ * A portrait panel: the timings the controller was found set with, and the
+ * copy it reads
+ */
+static void pl111_portrait_timings(struct pl111_drm_dev_private *priv)
+{
+	int i;
+
+	clk_prepare_enable(priv->clk);
+	for (i = 0; i < ARRAY_SIZE(priv->portrait_tim); i++)
+		writel(priv->portrait_tim[i], priv->regs + CLCD_TIM0 + 4 * i);
+	writel(priv->portrait_dma, priv->regs + CLCD_UBAS);
+}
+
+static void pl111_display_enable(struct drm_simple_display_pipe *pipe,
+				 struct drm_crtc_state *cstate,
+				 struct drm_plane_state *plane_state)
+{
+	struct drm_crtc *crtc = &pipe->crtc;
+	struct drm_plane *plane = &pipe->plane;
+	struct drm_device *drm = crtc->dev;
+	struct pl111_drm_dev_private *priv = drm->dev_private;
+	struct drm_framebuffer *fb = plane->state->fb;
+	bool grayscale = pl111_panel_is_grayscale(priv);
+	u32 cntl;
+
+	if (priv->variant->portrait)
+		pl111_portrait_timings(priv);
+	else
+		pl111_display_timings(priv, cstate);
 
 	/*
 	 * Detect grayscale bus format. We do not support a grayscale mode
@@ -471,6 +499,38 @@ static void pl111_display_disable(struct drm_simple_display_pipe *pipe)
 	clk_disable_unprepare(priv->clk);
 }
 
+/*
+ * A portrait panel: what changed in the framebuffer goes to the copy the
+ * controller reads, with the columns as lines
+ */
+static void pl111_portrait_update(struct pl111_drm_dev_private *priv,
+				  struct drm_plane_state *old_pstate,
+				  struct drm_plane_state *pstate)
+{
+	struct drm_framebuffer *fb = pstate->fb;
+	struct drm_gem_dma_object *obj = drm_fb_dma_get_gem_obj(fb, 0);
+	unsigned int pitch = fb->pitches[0] / 2;
+	struct drm_atomic_helper_damage_iter iter;
+	struct drm_rect clip;
+	const u16 *src;
+	u16 *dst;
+	int x, y;
+
+	if (!obj->vaddr)
+		return;
+
+	drm_atomic_helper_damage_iter_init(&iter, old_pstate, pstate);
+	drm_atomic_for_each_plane_damage(&iter, &clip) {
+		for (x = clip.x1; x < clip.x2; x++) {
+			src = (const u16 *)(obj->vaddr + fb->offsets[0]) +
+			      clip.y1 * pitch + x;
+			dst = priv->portrait_buf + x * 240 + clip.y1;
+			for (y = clip.y1; y < clip.y2; y++, src += pitch)
+				*dst++ = *src;
+		}
+	}
+}
+
 static void pl111_display_update(struct drm_simple_display_pipe *pipe,
 				 struct drm_plane_state *old_pstate)
 {
@@ -482,7 +542,9 @@ static void pl111_display_update(struct drm_simple_display_pipe *pipe,
 	struct drm_plane_state *pstate = plane->state;
 	struct drm_framebuffer *fb = pstate->fb;
 
-	if (fb) {
+	if (fb && priv->variant->portrait) {
+		pl111_portrait_update(priv, old_pstate, pstate);
+	} else if (fb) {
 		u32 addr = drm_fb_dma_get_gem_addr(fb, pstate, 0);
 
 		writel(addr, priv->regs + CLCD_UBAS);
@@ -683,6 +745,10 @@ int pl111_display_init(struct drm_device *drm)
 					   priv->connector);
 	if (ret)
 		return ret;
+
+	/* What changed, for the copy a portrait panel is shown */
+	if (priv->variant->portrait)
+		drm_plane_enable_fb_damage_clips(&priv->pipe.plane);
 
 	if (priv->variant->palette) {
 		ret = drm_mode_crtc_set_gamma_size(&priv->pipe.crtc,

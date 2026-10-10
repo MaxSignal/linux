@@ -71,6 +71,13 @@ static const struct drm_mode_config_funcs mode_config_funcs = {
 	.atomic_commit = drm_atomic_helper_commit,
 };
 
+/* Framebuffers told about when drawn to: a portrait panel shows a copy */
+static const struct drm_mode_config_funcs portrait_mode_config_funcs = {
+	.fb_create = drm_gem_fb_create_with_dirty,
+	.atomic_check = drm_atomic_helper_check,
+	.atomic_commit = drm_atomic_helper_commit,
+};
+
 static int pl111_modeset_init(struct drm_device *dev)
 {
 	struct drm_mode_config *mode_config;
@@ -88,7 +95,8 @@ static int pl111_modeset_init(struct drm_device *dev)
 		return ret;
 
 	mode_config = &dev->mode_config;
-	mode_config->funcs = &mode_config_funcs;
+	mode_config->funcs = priv->variant->portrait ?
+			     &portrait_mode_config_funcs : &mode_config_funcs;
 	mode_config->min_width = 1;
 	mode_config->max_width = 1024;
 	mode_config->min_height = 1;

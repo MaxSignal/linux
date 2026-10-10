@@ -11,6 +11,7 @@
 
 #include <linux/bitops.h>
 #include <linux/device.h>
+#include <linux/dma-mapping.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -492,6 +493,23 @@ static const struct pl111_variant_data pl111_nspire_cx = {
 	.fb_depth = 16,
 };
 
+/*
+ * From hardware revision W on, the CX's panel is 240x320, turned: its lines
+ * are the columns of the 320x240 picture
+ */
+static const u32 pl111_nspire_cx_portrait_pixel_formats[] = {
+	DRM_FORMAT_RGB565,
+	DRM_FORMAT_BGR565,
+};
+
+static const struct pl111_variant_data pl111_nspire_cx_portrait = {
+	.name = "PL111 TI-Nspire CX, 240x320 panel",
+	.formats = pl111_nspire_cx_portrait_pixel_formats,
+	.nformats = ARRAY_SIZE(pl111_nspire_cx_portrait_pixel_formats),
+	.fb_depth = 16,
+	.portrait = true,
+};
+
 static const u32 pl110_nspire_classic_pixel_formats[] = {
 	DRM_FORMAT_C4,
 	DRM_FORMAT_C8,
@@ -512,6 +530,35 @@ static const struct pl111_variant_data pl110_nspire_classic = {
 	.keep_enabled = true,
 };
 
+/*
+ * The panel the TI-Nspire OS has set the controller for: 240 pixel lines,
+ * 320 of them, on a CX with the 240x320 panel
+ */
+static int pl111_nspire_cx_init(struct drm_device *dev,
+				struct pl111_drm_dev_private *priv)
+{
+	u32 tim0 = readl(priv->regs + CLCD_TIM0);
+	u32 tim1 = readl(priv->regs + CLCD_TIM1);
+	int i;
+
+	priv->variant = &pl111_nspire_cx;
+	if (((tim0 >> 2 & 0x3f) + 1) * 16 != 240 || (tim1 & 0x3ff) + 1 != 320)
+		return 0;
+
+	priv->portrait_buf = dmam_alloc_attrs(dev->dev, 240 * 320 * 2,
+					      &priv->portrait_dma, GFP_KERNEL,
+					      DMA_ATTR_WRITE_COMBINE);
+	if (!priv->portrait_buf)
+		return -ENOMEM;
+	for (i = 0; i < ARRAY_SIZE(priv->portrait_tim); i++)
+		priv->portrait_tim[i] = readl(priv->regs + CLCD_TIM0 + 4 * i);
+
+	priv->variant = &pl111_nspire_cx_portrait;
+	drm_info(dev, "240x320 panel: showing the picture turned\n");
+
+	return 0;
+}
+
 int pl111_versatile_init(struct drm_device *dev, struct pl111_drm_dev_private *priv)
 {
 	const struct of_device_id *clcd_id;
@@ -519,10 +566,8 @@ int pl111_versatile_init(struct drm_device *dev, struct pl111_drm_dev_private *p
 	struct device_node *np;
 	struct regmap *map;
 
-	if (of_machine_is_compatible("ti,nspire-cx")) {
-		priv->variant = &pl111_nspire_cx;
-		return 0;
-	}
+	if (of_machine_is_compatible("ti,nspire-cx"))
+		return pl111_nspire_cx_init(dev, priv);
 	if (of_machine_is_compatible("ti,nspire-tp") ||
 	    of_machine_is_compatible("ti,nspire-clp")) {
 		priv->variant = &pl110_nspire_classic;

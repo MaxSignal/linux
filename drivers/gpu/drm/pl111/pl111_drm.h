@@ -121,6 +121,9 @@ struct drm_minor;
  * @keep_enabled: once enabled, the controller is never stopped, only the
  *	panel powered down and up: the panel shows the picture shifted by
  *	an amount that changes each time the controller starts
+ * @portrait: the panel takes 240 pixel lines, 320 of them, and shows the
+ *	picture turned: the controller reads a copy of the 320x240
+ *	framebuffer with its columns as lines, with the timings found set
  */
 struct pl111_variant_data {
 	const char *name;
@@ -135,6 +138,7 @@ struct pl111_variant_data {
 	unsigned int fb_depth;
 	bool palette;
 	bool keep_enabled;
+	bool portrait;
 };
 
 struct pl111_drm_dev_private {
@@ -161,6 +165,10 @@ struct pl111_drm_dev_private {
 	void (*variant_display_enable) (struct drm_device *drm, u32 format);
 	void (*variant_display_disable) (struct drm_device *drm);
 	bool use_device_memory;
+	/* The copy the controller reads, and its timings, with a portrait panel */
+	u16 *portrait_buf;
+	dma_addr_t portrait_dma;
+	u32 portrait_tim[4];
 };
 
 int pl111_display_init(struct drm_device *dev);
