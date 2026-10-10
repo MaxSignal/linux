@@ -656,6 +656,23 @@ endmenu
 
 menu "Boot options"
 
+config XIP_KERNEL
+	bool "Kernel Execute-In-Place from ROM"
+	depends on !MMU
+	help
+	  Run the kernel's code and read-only data straight from ROM or NOR
+	  flash at XIP_PHYS_ADDR, so that only its writable data uses RAM.
+	  The startup code copies that data to RAM. Use vmlinux.bin, the
+	  image to write at XIP_PHYS_ADDR, and start it there.
+
+config XIP_PHYS_ADDR
+	hex "XIP kernel physical address"
+	depends on XIP_KERNEL
+	default "0x00a00000"
+	help
+	  Where the kernel image is in ROM or flash, as seen with the MMU
+	  off (a P0 address on nommu systems: cached).
+
 config BUILTIN_DTB
 	bool "Use builtin DTB"
 	default n

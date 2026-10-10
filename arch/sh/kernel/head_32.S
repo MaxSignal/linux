@@ -58,6 +58,21 @@ ENTRY(_stext)
 	!			Initialize Status Register
 	mov.l	1f, r0		! MD=1, RB=0, BL=0, IMASK=0xF
 	ldc	r0, sr
+
+#ifdef CONFIG_XIP_KERNEL
+	!			Copy the writable data from ROM to RAM
+	mov.l	.Ldata_loc, r1
+	mov.l	.Ledata_loc, r2
+	mov.l	.Lsdata, r3
+.Lcopy_data:
+	cmp/hs	r2, r1
+	bt	.Lcopied
+	mov.l	@r1+, r0
+	mov.l	r0, @r3
+	bra	.Lcopy_data
+	 add	#4, r3
+.Lcopied:
+#endif
 	!			Initialize global interrupt mask
 #ifdef CONFIG_CPU_HAS_SR_RB
 	mov	#0, r0
@@ -348,6 +363,11 @@ ENTRY(stack_start)
 7:	.long	init_thread_union
 #if defined(CONFIG_OF_EARLY_FLATTREE)
 8:	.long	sh_fdt_init
+#endif
+#ifdef CONFIG_XIP_KERNEL
+.Ldata_loc:	.long	__data_loc
+.Ledata_loc:	.long	_edata_loc
+.Lsdata:	.long	_sdata
 #endif
 
 #ifdef CONFIG_PMB
