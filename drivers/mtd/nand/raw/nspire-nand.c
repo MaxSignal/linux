@@ -197,12 +197,15 @@ static int nspire_cx_exec(struct nand_chip *chip, const struct nand_subop *subop
 			last |= PL351_CMD_PHASE_CMD1(op.cmd[1]) |
 				PL351_CMD_PHASE_CMD1_VALID;
 
+		/* the last access ends the transfer (on a real CX, it must) */
 		words = op.data_len / 4;
 		for (i = 0; i < words; i++)
 			writel(get_unaligned((const u32 *)buf + i), nand->window +
-			       PL351_DATA_PHASE + (i + 1 == words ? last : 0));
+			       PL351_DATA_PHASE +
+			       (i + 1 == words && op.data_len % 4 == 0 ? last : 0));
 		for (i = words * 4; i < op.data_len; i++)
-			writeb(buf[i], nand->window + PL351_DATA_PHASE);
+			writeb(buf[i], nand->window + PL351_DATA_PHASE +
+			       (i + 1 == op.data_len ? last : 0));
 	}
 
 	if (op.waitrdy) {
@@ -214,13 +217,19 @@ static int nspire_cx_exec(struct nand_chip *chip, const struct nand_subop *subop
 	if (op.data && op.data->type == NAND_OP_DATA_IN_INSTR) {
 		u8 *buf = op.data->ctx.data.buf.in + op.data_off;
 
-		words = op.data_len / 4;
-		for (i = 0; i < words; i++)
-			put_unaligned(readl(nand->window + PL351_DATA_PHASE +
-					    (i + 1 == words ? PL351_DATA_PHASE_CLEAR_CS : 0)),
-				      (u32 *)buf + i);
-		for (i = words * 4; i < op.data_len; i++)
-			buf[i] = readb(nand->window + PL351_DATA_PHASE);
+		/*
+		 * Words only, each ending its transfer: on a real CX, a read
+		 * that does not hangs the bus, and the chip goes on with the
+		 * next bytes once selected again. Reading a few bytes more (of
+		 * a status or an ID) is harmless.
+		 */
+		words = DIV_ROUND_UP(op.data_len, 4);
+		for (i = 0; i < words; i++) {
+			u32 w = readl(nand->window + PL351_DATA_PHASE +
+				      PL351_DATA_PHASE_CLEAR_CS);
+
+			memcpy(buf + 4 * i, &w, min(4U, op.data_len - 4 * i));
+		}
 	}
 
 	return 0;
