@@ -79,9 +79,10 @@
 /* RX and TX queues can buffer QUEUE_SIZE packets before they hit the
  * next layer of buffering.  For TX that's a circular buffer; for RX
  * consider it a NOP.  A third layer is provided by the TTY code.
+ * Systems built for small memory make do with a quarter of that.
  */
-#define QUEUE_SIZE		16
-#define WRITE_BUF_SIZE		8192		/* TX only */
+#define QUEUE_SIZE		(IS_ENABLED(CONFIG_BASE_SMALL) ? 4 : 16)
+#define WRITE_BUF_SIZE		(IS_ENABLED(CONFIG_BASE_SMALL) ? 2048 : 8192) /* TX only */
 #define GS_CONSOLE_BUF_SIZE	8192
 
 /* Prevents race conditions while accessing gser->ioport */
