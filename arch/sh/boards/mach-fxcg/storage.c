@@ -29,10 +29,10 @@
 #include <linux/ctype.h>
 #include <linux/fs.h>
 #include <linux/fs_context.h>
-#include <linux/highmem.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
-#include <linux/pagemap.h>
+#include <linux/minmax.h>
+#include <linux/uio.h>
 #include <linux/slab.h>
 #include <linux/statfs.h>
 #include <linux/string.h>
@@ -115,15 +115,21 @@ static int build_page_map(void)
 	return 0;
 }
 
-/* Copy from 512-byte sector n of the disk; unwritten sectors read 0xff. */
-static void read_disk(u32 n, unsigned int off, void *buf, unsigned int len)
+static const u8 ff_sector[512] = { [0 ... 511] = 0xff };
+
+/* Where 512-byte sector n of the disk is, NULL if never written (0xff). */
+static const u8 *disk_sector(u32 n)
 {
 	u32 page = n / 8;
 
 	if (page >= MAX_PAGES || page_map[page] == UNMAPPED)
-		memset(buf, 0xff, len);
-	else
-		memcpy(buf, slot_addr(page_map[page]) + (n % 8) * 512 + off, len);
+		return NULL;
+	return slot_addr(page_map[page]) + (n % 8) * 512;
+}
+
+static void read_disk(u32 n, unsigned int off, void *buf, unsigned int len)
+{
+	memcpy(buf, (disk_sector(n) ?: ff_sector) + off, len);
 }
 
 /* ------------------------------------------------------------ FAT16 */
@@ -324,7 +330,7 @@ static int fls_walk(struct fls_inode *dir, loff_t *pos,
 
 static const struct inode_operations fls_dir_iops;
 static const struct file_operations fls_dir_fops;
-static const struct address_space_operations fls_aops;
+static const struct file_operations fls_file_fops;
 
 static struct inode *fls_iget(struct super_block *sb, struct fls_dirent *d)
 {
@@ -345,8 +351,7 @@ static struct inode *fls_iget(struct super_block *sb, struct fls_dirent *d)
 		set_nlink(inode, 2);
 	} else {
 		inode->i_mode = S_IFREG | 0555;	/* FAT has no x bit: allow exec */
-		inode->i_fop = &generic_ro_fops;
-		inode->i_data.a_ops = &fls_aops;
+		inode->i_fop = &fls_file_fops;
 		inode->i_size = d->size;
 		set_nlink(inode, 1);
 	}
@@ -361,37 +366,56 @@ static struct inode *fls_iget(struct super_block *sb, struct fls_dirent *d)
 	return inode;
 }
 
-static int fls_read_folio(struct file *file, struct folio *folio)
+/*
+ * File data goes straight from the flash to the reader. A page cache
+ * would only hold copies of what the flash already has at hand, and on
+ * a 2 MiB nommu system its pages scattered over the RAM leave no room
+ * for the next program's stack. Programs run from here get their private
+ * copy through this as well (nommu mmap).
+ */
+static ssize_t fls_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
-	struct inode *inode = folio->mapping->host;
+	struct inode *inode = file_inode(iocb->ki_filp);
 	struct fls_inode *fi = FLS_I(inode);
-	loff_t pos = folio_pos(folio), size = i_size_read(inode);
-	size_t len = 0;
-	u8 *buf = kmap_local_folio(folio, 0);
+	loff_t pos = iocb->ki_pos, size = i_size_read(inode);
+	ssize_t done = 0;
 	int ret;
 
 	mutex_lock(&vol.lock);
 	ret = fls_chain(fi);
-	while (!ret && len < folio_size(folio) && pos + len < size) {
-		u32 sec = fls_bmap(fi, (pos + len) / 512);
+	while (!ret && iov_iter_count(to) && pos < size) {
+		u32 sec = fls_bmap(fi, pos / 512);
+		unsigned int off = pos % 512;
+		size_t n = min_t(size_t, min_t(loff_t, 512 - off, size - pos),
+				 iov_iter_count(to));
+		const u8 *src = sec ? disk_sector(sec) : NULL;
 
-		if (!sec)
+		if (!sec) {
 			ret = -EIO;	/* the chain is shorter than the size */
-		else
-			read_disk(sec, 0, buf + len, 512);
-		len += 512;
+			break;
+		}
+		if (copy_to_iter((src ?: ff_sector) + off, n, to) != n) {
+			ret = -EFAULT;
+			break;
+		}
+		pos += n;
+		done += n;
 	}
 	mutex_unlock(&vol.lock);
-	if (ret || pos + len > size)
-		len = !ret && size > pos ? size - pos : 0;
-	buf = folio_zero_tail(folio, len, buf + len);
-	kunmap_local(buf);
-	folio_end_read(folio, ret == 0);
-	return ret;
+	iocb->ki_pos = pos;
+	return done ?: ret;
 }
 
-static const struct address_space_operations fls_aops = {
-	.read_folio	= fls_read_folio,
+/* nommu: only private copies, filled by fls_read_iter() */
+static int fls_mmap_prepare(struct vm_area_desc *desc)
+{
+	return -ENOSYS;
+}
+
+static const struct file_operations fls_file_fops = {
+	.llseek		= generic_file_llseek,
+	.read_iter	= fls_read_iter,
+	.mmap_prepare	= fls_mmap_prepare,
 };
 
 struct fls_find {
