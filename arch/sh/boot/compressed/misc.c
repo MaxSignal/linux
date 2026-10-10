@@ -18,6 +18,12 @@
 
 #include "misc.h"
 
+#ifdef CONFIG_FXCG_DEBUG_MARKERS
+#include <mach/debug-marker.h>
+#else
+#define fxcg_debug_mark(slot, color) do { } while (0)
+#endif
+
 /*
  * gzip declarations
  */
@@ -94,6 +100,7 @@ void* memcpy(void* __dest, __const void* __src,
 
 static void error(char *x)
 {
+	fxcg_debug_mark(0, FXCG_MARK_RED);
 	puts("\n\n");
 	puts(x);
 	puts("\n\n -- System halted");
@@ -135,6 +142,7 @@ void decompress_kernel(void)
 	free_mem_ptr = (unsigned long)&_end;
 	free_mem_end_ptr = free_mem_ptr + HEAP_SIZE;
 
+	fxcg_debug_mark(0, FXCG_MARK_YELLOW);
 	puts("Uncompressing Linux... ");
 	__decompress(input_data, input_len, NULL, NULL, output, 0, NULL, error);
 #if defined(CONFIG_CPU_SH4A) && defined(CONFIG_32BIT)
@@ -152,5 +160,6 @@ void decompress_kernel(void)
 					     "icbi @%0" : : "r" (a) : "memory");
 	}
 #endif
+	fxcg_debug_mark(1, FXCG_MARK_GREEN);
 	puts("Ok, booting the kernel.\n");
 }

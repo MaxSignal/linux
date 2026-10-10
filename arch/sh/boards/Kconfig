@@ -378,6 +378,18 @@ config SH_FXCG
 	  fxcg-linux loader add-in. The R61524 LCD and the key matrix are
 	  used as the system console.
 
+config FXCG_DEBUG_MARKERS
+	bool "Show the boot progress on the LCD"
+	depends on SH_FXCG
+	help
+	  Draw coloured squares at the bottom right of the screen while
+	  the zImage decompresses: yellow when it starts, green when the
+	  kernel is about to start, red if decompression fails, then
+	  white when the kernel reaches the board setup. The console
+	  clears them. For bringing the port up on a calculator.
+
+	  If unsure, say N.
+
 source "arch/sh/boards/mach-r2d/Kconfig"
 source "arch/sh/boards/mach-highlander/Kconfig"
 source "arch/sh/boards/mach-sdk7780/Kconfig"

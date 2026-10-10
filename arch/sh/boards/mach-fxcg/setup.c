@@ -15,9 +15,12 @@
 #include <linux/printk.h>
 #include <asm/machvec.h>
 #include <mach/fxcg.h>
+#include <mach/debug-marker.h>
 
 static void __init fxcg_setup(char **cmdline_p)
 {
+	if (IS_ENABLED(CONFIG_FXCG_DEBUG_MARKERS))
+		fxcg_debug_mark(2, FXCG_MARK_WHITE);
 	fxcg_console_init();
 	pr_info("Casio fx-CG10/fx-CG20 (Prizm)\n");
 }
