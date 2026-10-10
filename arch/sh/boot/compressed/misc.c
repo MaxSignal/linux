@@ -137,5 +137,20 @@ void decompress_kernel(void)
 
 	puts("Uncompressing Linux... ");
 	__decompress(input_data, input_len, NULL, NULL, output, 0, NULL, error);
+#if defined(CONFIG_CPU_SH4A) && defined(CONFIG_32BIT)
+	/*
+	 * Without the 29-bit P2 alias the kernel is written through the
+	 * operand cache. Push it to memory and drop any instruction cache
+	 * line that still holds what used to be there (e.g. a boot loader
+	 * or this image before it moved itself) before jumping to it.
+	 */
+	if ((unsigned long)input_data > output_addr) {
+		unsigned long a;
+
+		for (a = output_addr & ~31UL; a < (unsigned long)input_data; a += 32)
+			__asm__ __volatile__("ocbwb @%0\n\t"
+					     "icbi @%0" : : "r" (a) : "memory");
+	}
+#endif
 	puts("Ok, booting the kernel.\n");
 }
