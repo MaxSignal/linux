@@ -192,19 +192,23 @@ static int nspire_cx_exec(struct nand_chip *chip, const struct nand_subop *subop
 	if (op.data && op.data->type == NAND_OP_DATA_OUT_INSTR) {
 		const u8 *buf = op.data->ctx.data.buf.out + op.data_off;
 
-		last = PL351_DATA_PHASE_CLEAR_CS;
+		last = 0;
 		if (op.ncmds == 2)
-			last |= PL351_CMD_PHASE_CMD1(op.cmd[1]) |
-				PL351_CMD_PHASE_CMD1_VALID;
+			last = PL351_CMD_PHASE_CMD1(op.cmd[1]) |
+			       PL351_CMD_PHASE_CMD1_VALID;
 
-		/* the last access ends the transfer (on a real CX, it must) */
+		/*
+		 * Each access ends its transfer, as reads must on a real CX
+		 * (Firebird notes writes the same); the last one also gives
+		 * the second command
+		 */
 		words = op.data_len / 4;
 		for (i = 0; i < words; i++)
 			writel(get_unaligned((const u32 *)buf + i), nand->window +
-			       PL351_DATA_PHASE +
+			       PL351_DATA_PHASE + PL351_DATA_PHASE_CLEAR_CS +
 			       (i + 1 == words && op.data_len % 4 == 0 ? last : 0));
 		for (i = words * 4; i < op.data_len; i++)
-			writeb(buf[i], nand->window + PL351_DATA_PHASE +
+			writeb(buf[i], nand->window + PL351_DATA_PHASE + PL351_DATA_PHASE_CLEAR_CS +
 			       (i + 1 == op.data_len ? last : 0));
 	}
 
