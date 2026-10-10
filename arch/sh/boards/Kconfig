@@ -378,6 +378,15 @@ config SH_FXCG
 	  fxcg-linux loader add-in. The R61524 LCD and the key matrix are
 	  used as the system console.
 
+config FXCG_STORAGE
+	bool "Casio storage memory file system (read only)"
+	depends on SH_FXCG
+	help
+	  The "fls" file system: the files of the Casio OS storage memory
+	  (the disk the calculator shows over USB), read straight from the
+	  NOR flash through the Casio OS's own flash translation layer
+	  format ("mount -t fls fls /mnt/fls"). The flash is never written.
+
 config FXCG_DEBUG_MARKERS
 	bool "Show the boot progress on the LCD"
 	depends on SH_FXCG
