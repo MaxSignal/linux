@@ -134,6 +134,10 @@ static inline void r8a66597_read_fifo(struct r8a66597 *r8a66597,
 	int i;
 
 	if (r8a66597->pdata->on_chip) {
+		/* in a big-endian FIFO the first byte is the most significant */
+		int shift = r8a66597->pdata->endian ? 24 : 0;
+		int step = r8a66597->pdata->endian ? -8 : 8;
+
 		/* 32-bit accesses for on_chip controllers */
 
 		/* aligned buf case */
@@ -148,7 +152,7 @@ static inline void r8a66597_read_fifo(struct r8a66597 *r8a66597,
 			if (!(i & 0x03))
 				data = ioread32(fifoaddr);
 
-			buf[i] = (data >> ((i & 0x03) * 8)) & 0xff;
+			buf[i] = (data >> (shift + (i & 0x03) * step)) & 0xff;
 		}
 	} else {
 		/* 16-bit accesses for external controllers */
@@ -197,7 +201,7 @@ static inline void r8a66597_write_fifo(struct r8a66597 *r8a66597,
 				       int len)
 {
 	void __iomem *fifoaddr = r8a66597->reg + ep->fifoaddr;
-	int adj = 0;
+	int adj = 0, big = 0;
 	int i;
 
 	if (r8a66597->pdata->on_chip) {
@@ -222,12 +226,15 @@ static inline void r8a66597_write_fifo(struct r8a66597 *r8a66597,
 			adj = 0x03; /* 32-bit wide */
 		else
 			adj = 0x01; /* 16-bit wide */
+	} else if (r8a66597->pdata->on_chip) {
+		/* big-endian 32-bit port: byte n goes to address n */
+		big = 0x03;
 	}
 
 	if (r8a66597->pdata->wr0_shorted_to_wr1)
 		r8a66597_bclr(r8a66597, MBW_16, ep->fifosel);
 	for (i = 0; i < len; i++)
-		iowrite8(buf[i], fifoaddr + adj - (i & adj));
+		iowrite8(buf[i], fifoaddr + adj - (i & adj) + (i & big));
 	if (r8a66597->pdata->wr0_shorted_to_wr1)
 		r8a66597_bclr(r8a66597, MBW_16, ep->fifosel);
 }

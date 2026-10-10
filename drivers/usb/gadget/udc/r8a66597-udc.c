@@ -817,6 +817,11 @@ static void init_controller(struct r8a66597 *r8a66597)
 
 		r8a66597_bset(r8a66597, SCKE, SYSCFG0);
 
+		/* FIFO byte order: on-chip controllers of big-endian CPUs */
+		r8a66597_bset(r8a66597, endian, CFIFOSEL);
+		r8a66597_bset(r8a66597, endian, D0FIFOSEL);
+		r8a66597_bset(r8a66597, endian, D1FIFOSEL);
+
 		r8a66597_bset(r8a66597, irq_sense, INTENB1);
 		r8a66597_write(r8a66597, BURST | CPU_ADR_RD_WR,
 				DMA0CFG);
@@ -1254,7 +1259,7 @@ static void set_feature(struct r8a66597 *r8a66597, struct usb_ctrlrequest *ctrl)
 
 			if (tmp == CS_IDST)
 				r8a66597_bset(r8a66597,
-					      le16_to_cpu(ctrl->wIndex >> 8),
+					      le16_to_cpu(ctrl->wIndex) >> 8,
 					      TESTMODE);
 			break;
 		default:
@@ -1284,15 +1289,19 @@ static void set_feature(struct r8a66597 *r8a66597, struct usb_ctrlrequest *ctrl)
 /* if return value is true, call class driver's setup() */
 static int setup_packet(struct r8a66597 *r8a66597, struct usb_ctrlrequest *ctrl)
 {
-	u16 *p = (u16 *)ctrl;
-	unsigned long offset = USBREQ;
-	int i, ret = 0;
+	u16 req;
+	int ret = 0;
 
 	/* read fifo */
 	r8a66597_write(r8a66597, ~VALID, INTSTS0);
 
-	for (i = 0; i < 4; i++)
-		p[i] = r8a66597_read(r8a66597, offset + i*2);
+	/* USBREQ holds bRequest in its high byte, whatever the CPU's endianness */
+	req = r8a66597_read(r8a66597, USBREQ);
+	ctrl->bRequestType = req & 0xff;
+	ctrl->bRequest = req >> 8;
+	ctrl->wValue = cpu_to_le16(r8a66597_read(r8a66597, USBVAL));
+	ctrl->wIndex = cpu_to_le16(r8a66597_read(r8a66597, USBINDX));
+	ctrl->wLength = cpu_to_le16(r8a66597_read(r8a66597, USBLENG));
 
 	/* check request */
 	if ((ctrl->bRequestType & USB_TYPE_MASK) == USB_TYPE_STANDARD) {
