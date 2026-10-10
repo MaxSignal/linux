@@ -6623,8 +6623,17 @@ void calculate_min_free_kbytes(void)
 	lowmem_kbytes = nr_free_buffer_pages() * (PAGE_SIZE >> 10);
 	new_min_free_kbytes = int_sqrt(lowmem_kbytes * 16);
 
+	/*
+	 * Tiny nommu machines with a megabyte or two of RAM cannot afford
+	 * to keep 128 KiB in reserve.
+	 */
+	if (IS_ENABLED(CONFIG_BASE_SMALL) && !IS_ENABLED(CONFIG_MMU))
+		new_min_free_kbytes = max(new_min_free_kbytes / 4, 16);
+	else
+		new_min_free_kbytes = max(new_min_free_kbytes, 128);
+
 	if (new_min_free_kbytes > user_min_free_kbytes)
-		min_free_kbytes = clamp(new_min_free_kbytes, 128, 262144);
+		min_free_kbytes = min(new_min_free_kbytes, 262144);
 	else
 		pr_warn_ratelimited("min_free_kbytes is not updated to %d because user defined value %d is preferred\n",
 				    new_min_free_kbytes, user_min_free_kbytes);
