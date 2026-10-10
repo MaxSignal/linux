@@ -40,7 +40,7 @@ config SUPERH
 	select HAVE_GUP_FAST if MMU
 	select HAVE_FUNCTION_GRAPH_TRACER
 	select HAVE_FUNCTION_TRACER
-	select HAVE_HW_BREAKPOINT
+	select HAVE_HW_BREAKPOINT if !SH_FXCG
 	select HAVE_IOREMAP_PROT if MMU && !X2TLB
 	select HAVE_KERNEL_BZIP2
 	select HAVE_KERNEL_GZIP
@@ -49,7 +49,7 @@ config SUPERH
 	select HAVE_KERNEL_XZ
 	select HAVE_KPROBES
 	select HAVE_KRETPROBES
-	select HAVE_MIXED_BREAKPOINTS_REGS
+	select HAVE_MIXED_BREAKPOINTS_REGS if !SH_FXCG
 	select HAVE_MOD_ARCH_SPECIFIC if DWARF_UNWINDER
 	select HAVE_NMI
 	select HAVE_PATA_PLATFORM
@@ -68,7 +68,7 @@ config SUPERH
 	select OLD_SIGACTION
 	select OLD_SIGSUSPEND
 	select PCI_DOMAINS if PCI
-	select PERF_EVENTS
+	select PERF_EVENTS if !SH_FXCG
 	select PERF_USE_VMALLOC
 	select RTC_LIB
 	select SPARSE_IRQ
@@ -396,6 +396,14 @@ config CPU_SUBTYPE_SH7723
 	help
 	  Select SH7723 if you have an SH-MobileR2 CPU.
 
+config CPU_SUBTYPE_SH7305
+	bool "Support SH7305 processor"
+	select CPU_SH4AL_DSP
+	help
+	  Select SH7305 if you have the SH4AL-DSP based CPU found in the
+	  Casio fx-CG10/20/50 ("Prizm") and fx-9860GIII graphing
+	  calculators.
+
 config CPU_SUBTYPE_SH7724
 	bool "Support SH7724 processor"
 	select CPU_SH4A
@@ -679,7 +687,8 @@ config ZERO_PAGE_OFFSET
 	  This sets the default offset of zero page.
 
 config BOOT_LINK_OFFSET
-	hex
+	hex "Link offset of the zImage" if SH_FXCG
+	default "0x00140000" if SH_FXCG
 	default "0x00210000" if SH_SHMIN
 	default "0x00810000" if SH_7780_SOLUTION_ENGINE
 	default "0x009e0000" if SH_TITAN

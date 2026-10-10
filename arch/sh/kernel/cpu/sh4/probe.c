@@ -143,6 +143,11 @@ void cpu_probe(void)
 		break;
 	case 0x300b:
 		switch (prr) {
+		case 0xc0:
+			/* SH4AL-DSP core, no FPU (Casio calculators) */
+			boot_cpu_data.type = CPU_SH7305;
+			boot_cpu_data.flags &= ~CPU_HAS_FPU;
+			break;
 		case 0x20:
 			boot_cpu_data.type = CPU_SH7724;
 			boot_cpu_data.flags |= CPU_HAS_L2_CACHE;
@@ -199,7 +204,7 @@ void cpu_probe(void)
 	 * On anything that's not a direct-mapped cache, look to the CVR
 	 * for I/D-cache specifics.
 	 */
-	if (boot_cpu_data.icache.ways > 1) {
+	if (boot_cpu_data.icache.ways > 1 && sizes[(cvr >> 20) & 0xf]) {
 		size = sizes[(cvr >> 20) & 0xf];
 		boot_cpu_data.icache.way_incr	= (size >> 1);
 		boot_cpu_data.icache.sets	= (size >> 6);
@@ -207,7 +212,7 @@ void cpu_probe(void)
 	}
 
 	/* And the rest of the D-cache */
-	if (boot_cpu_data.dcache.ways > 1) {
+	if (boot_cpu_data.dcache.ways > 1 && sizes[(cvr >> 16) & 0xf]) {
 		size = sizes[(cvr >> 16) & 0xf];
 		boot_cpu_data.dcache.way_incr	= (size >> 1);
 		boot_cpu_data.dcache.sets	= (size >> 6);

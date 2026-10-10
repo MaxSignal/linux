@@ -369,6 +369,15 @@ config SH_APSH4AD0A
 	help
 	  Select AP-SH4AD-0A if configuring for an ALPHAPROJECT AP-SH4AD-0A.
 
+config SH_FXCG
+	bool "Casio fx-CG10/fx-CG20 (Prizm)"
+	depends on CPU_SUBTYPE_SH7305
+	help
+	  Select this to run on the Casio fx-CG10/fx-CG20 colour graphing
+	  calculators. The kernel is started from the Casio OS by the
+	  fxcg-linux loader add-in. The R61524 LCD and the key matrix are
+	  used as the system console.
+
 source "arch/sh/boards/mach-r2d/Kconfig"
 source "arch/sh/boards/mach-highlander/Kconfig"
 source "arch/sh/boards/mach-sdk7780/Kconfig"

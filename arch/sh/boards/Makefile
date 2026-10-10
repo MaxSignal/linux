@@ -36,3 +36,4 @@ obj-$(CONFIG_SH_SH7763RDP)	+= mach-sh7763rdp/
 obj-$(CONFIG_SH_LANDISK)	+= mach-landisk/
 obj-$(CONFIG_SH_LBOX_RE2)	+= mach-lboxre2/
 obj-$(CONFIG_SH_RSK)		+= mach-rsk/
+obj-$(CONFIG_SH_FXCG)		+= mach-fxcg/
