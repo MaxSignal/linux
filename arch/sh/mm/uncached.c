@@ -15,7 +15,12 @@
  * Default value only valid in 29 bit mode, in 32bit mode this will be
  * updated by the early PMB initialization code.
  */
+#ifdef CONFIG_MMU
 unsigned long cached_to_uncached = SZ_512M;
+#else
+/* nommu SH-4 runs from P0: the P2 alias of the same RAM is uncached */
+unsigned long cached_to_uncached = P2SEG;
+#endif
 unsigned long uncached_size = SZ_512M;
 unsigned long uncached_start, uncached_end;
 EXPORT_SYMBOL(uncached_start);

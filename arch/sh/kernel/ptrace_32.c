@@ -58,6 +58,7 @@ static inline int put_stack_long(struct task_struct *task, int offset,
 	return 0;
 }
 
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
 void ptrace_triggered(struct perf_event *bp,
 		      struct perf_sample_data *data, struct pt_regs *regs)
 {
@@ -106,6 +107,13 @@ static int set_single_step(struct task_struct *tsk, unsigned long addr)
 
 	return 0;
 }
+
+#else
+static int set_single_step(struct task_struct *tsk, unsigned long addr)
+{
+	return -ENOSYS;
+}
+#endif
 
 void user_enable_single_step(struct task_struct *child)
 {

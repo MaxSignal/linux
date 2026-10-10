@@ -149,6 +149,16 @@ BUILD_TRAP_HANDLER(debug)
 /*
  * Special handler for BUG() traps.
  */
+#ifndef CONFIG_HAVE_HW_BREAKPOINT
+/* User Break Controller exception without the hw_breakpoint framework */
+BUILD_TRAP_HANDLER(breakpoint)
+{
+	TRAP_HANDLER_DECL;
+
+	force_sig(SIGTRAP);
+}
+#endif
+
 BUILD_TRAP_HANDLER(bug)
 {
 	TRAP_HANDLER_DECL;

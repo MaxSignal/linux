@@ -156,7 +156,7 @@ __switch_to(struct task_struct *prev, struct task_struct *next)
 	if (next->thread.fpu_counter > 5)
 		prefetch(next_t->xstate);
 
-#ifdef CONFIG_MMU
+#ifdef CONFIG_CPU_HAS_SR_RB
 	/*
 	 * Restore the kernel mode register
 	 *	k7 (r7_bank1)

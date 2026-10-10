@@ -84,6 +84,7 @@ config 29BIT
 config 32BIT
 	bool
 	default !MMU
+	select UNCACHED_MAPPING if CPU_SH4 && !MMU
 
 config PMB
 	bool "Support 32-bit physical addressing through PMB"

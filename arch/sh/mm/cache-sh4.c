@@ -195,6 +195,7 @@ static void sh4_flush_cache_all(void *unused)
  *
  * Caller takes mm->mmap_lock.
  */
+#ifdef CONFIG_MMU
 static void sh4_flush_cache_mm(void *arg)
 {
 	struct mm_struct *mm = arg;
@@ -305,6 +306,7 @@ static void sh4_flush_cache_range(void *args)
 	if (vma->vm_flags & VM_EXEC)
 		flush_icache_all();
 }
+#endif /* CONFIG_MMU */
 
 /**
  * __flush_cache_one
@@ -390,10 +392,12 @@ void __init sh4_cache_init(void)
 	local_flush_icache_range	= sh4_flush_icache_range;
 	local_flush_dcache_folio	= sh4_flush_dcache_folio;
 	local_flush_cache_all		= sh4_flush_cache_all;
+#ifdef CONFIG_MMU
 	local_flush_cache_mm		= sh4_flush_cache_mm;
 	local_flush_cache_dup_mm	= sh4_flush_cache_mm;
 	local_flush_cache_page		= sh4_flush_cache_page;
 	local_flush_cache_range		= sh4_flush_cache_range;
+#endif
 
 	sh4__flush_region_init();
 }
