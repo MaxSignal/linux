@@ -39,6 +39,8 @@
 
 /* The Casio OS's 384x216 area sits at panel H = 389 - x, V = y */
 #define LCD_ORIGIN_H	389
+#define LCD_PANEL_WIDTH		396
+#define LCD_PANEL_HEIGHT	224
 
 /* SH7305 key scan unit: six 16-bit words, word = col/2, bit = row + 8*(col&1) */
 #define KEYSC_DATA	((void __iomem *)0xa44b0000)
@@ -51,9 +53,11 @@
 #define STATUS_ROW	(ROWS - 1)
 
 #define ATTR(fg, bg)	((fg) | ((bg) << 4))
-#define DEF_FG		7
-#define DEF_BG		0
+/* dark text on white, like the Casio OS and the panel's white border */
+#define DEF_FG		0
+#define DEF_BG		15
 #define DEF_ATTR	ATTR(DEF_FG, DEF_BG)
+#define STATUS_ATTR	ATTR(0, 7)	/* black on light grey */
 
 struct cell {
 	u8 ch;
@@ -140,12 +144,19 @@ static void lcd_draw_cell(int row, int col, struct cell c, bool cursor)
 	}
 }
 
+/* Fill the whole panel, including the border around the Casio OS area. */
 static void lcd_fill(u16 color)
 {
 	int i;
 
-	lcd_window(0, 0, FXCG_LCD_WIDTH - 1, FXCG_LCD_HEIGHT - 1);
-	for (i = 0; i < FXCG_LCD_WIDTH * FXCG_LCD_HEIGHT; i++)
+	lcd_reg(R_HSA, 0);
+	lcd_reg(R_HEA, LCD_PANEL_WIDTH - 1);
+	lcd_reg(R_VSA, 0);
+	lcd_reg(R_VEA, LCD_PANEL_HEIGHT - 1);
+	lcd_reg(R_HADDR, 0);
+	lcd_reg(R_VADDR, 0);
+	lcd_select(R_GRAM);
+	for (i = 0; i < LCD_PANEL_WIDTH * LCD_PANEL_HEIGHT; i++)
 		__raw_writew(color, LCD_DATA);
 }
 
@@ -652,7 +663,7 @@ static struct {
 
 static void status_put(int *col, const char *s, bool on)
 {
-	u8 attr = on ? ATTR(0, 11) : ATTR(8, 0);
+	u8 attr = on ? ATTR(0, 11) : STATUS_ATTR;
 
 	while (*s && *col < COLS) {
 		screen[STATUS_ROW][*col].ch = *s++;
@@ -660,7 +671,7 @@ static void status_put(int *col, const char *s, bool on)
 	}
 	if (*col < COLS) {
 		screen[STATUS_ROW][*col].ch = ' ';
-		screen[STATUS_ROW][(*col)++].attr = ATTR(8, 0);
+		screen[STATUS_ROW][(*col)++].attr = STATUS_ATTR;
 	}
 }
 
@@ -676,7 +687,7 @@ static void status_update(void)
 	status_put(&col, "F1| F2> F3< F4& F5; F6$ OPTN=TAB", false);
 	while (col < COLS) {
 		screen[STATUS_ROW][col].ch = ' ';
-		screen[STATUS_ROW][col++].attr = ATTR(8, 0);
+		screen[STATUS_ROW][col++].attr = STATUS_ATTR;
 	}
 }
 
