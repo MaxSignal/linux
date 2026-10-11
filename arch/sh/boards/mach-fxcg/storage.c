@@ -75,11 +75,12 @@ static bool sector_header_ok(const u8 *h)
 {
 	int i;
 
-	/* three copies of { 0xffffffnn, 0x000000mm } with mm = ~nn */
+	/*
+	 * three copies of { ~seq, seq }, seq numbering the sectors in the
+	 * order they were taken into use: 32 bits, it goes past 255
+	 */
 	for (i = 0; i < 24; i += 8)
-		if (get_unaligned_be32(h + i) >> 8 != 0xffffff ||
-		    get_unaligned_be32(h + i + 4) >> 8 != 0 ||
-		    (h[i + 3] ^ h[i + 7]) != 0xff)
+		if (get_unaligned_be32(h + i) != ~get_unaligned_be32(h + i + 4))
 			return false;
 	return true;
 }
