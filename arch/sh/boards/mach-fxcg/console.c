@@ -36,6 +36,10 @@
 #define R_HEA		0x211
 #define R_VSA		0x212
 #define R_VEA		0x213
+/* backlight: level 0-249 is written as level + 6 (gbl08ma's Utilities) */
+#define R_BACKLIGHT	0x5a1
+#define BL_MAX		249
+#define BL_STEP		25
 
 /* The Casio OS's 384x216 area sits at panel H = 389 - x, V = y */
 #define LCD_ORIGIN_H	389
@@ -73,6 +77,7 @@ static DEFINE_SPINLOCK(con_lock);
 
 static struct cell screen[ROWS][COLS];	/* wanted contents */
 static struct cell shown[ROWS][COLS];	/* what the LCD shows */
+static bool asleep;			/* backlight off, LCD not drawn */
 
 static struct {
 	int x, y;
@@ -108,6 +113,21 @@ static inline void lcd_reg(u16 reg, u16 val)
 {
 	lcd_select(reg);
 	__raw_writew(val, LCD_DATA);
+}
+
+static inline u16 lcd_read_reg(u16 reg)
+{
+	lcd_select(reg);
+	return __raw_readw(LCD_DATA);
+}
+
+/* One step brighter (dir 1) or darker (dir -1). Under con_lock. */
+static void backlight_step(int dir)
+{
+	int level = (lcd_read_reg(R_BACKLIGHT) & 0xff) - 6;
+
+	level = clamp(level + dir * BL_STEP, 0, BL_MAX);
+	lcd_reg(R_BACKLIGHT, level + 6);
 }
 
 /* Open a window on [x0,x1]x[y0,y1] and select GRAM for streaming. */
@@ -167,6 +187,8 @@ static void con_flush(void)
 			    !vt.cursor_on;
 	int r, c;
 
+	if (asleep)
+		return;
 	if (cursor_moved && vt.shown_y >= 0) {
 		lcd_draw_cell(vt.shown_y, vt.shown_x,
 			      screen[vt.shown_y][vt.shown_x], false);
@@ -597,7 +619,7 @@ struct keydef {
 };
 
 static const struct keydef keymap[NKEYS] = {
-	[KEY(0, 0)] = { 0x03, 0x04 },			/* AC/ON: ^C, ^D */
+	[KEY(0, 0)] = { 0x03 },				/* AC/ON: ^C; SHIFT: sleep */
 	[KEY(6, 1)] = { '0', 0, 'z' },
 	[KEY(5, 1)] = { '.', '=', ' ' },
 	[KEY(4, 1)] = { ' ', '"', '"' },		/* x10^x */
@@ -658,6 +680,7 @@ static struct {
 	int held_key;		/* key that auto-repeats, -1 = none */
 	int held_ticks;
 	bool shift, alpha, alpha_lock, caps, ctrl;
+	u16 backlight;		/* register value while asleep */
 	struct timer_list timer;
 } kbd;
 
@@ -697,6 +720,37 @@ static void kbd_emit(const char *s, size_t n)
 	tty_flip_buffer_push(&fxcg_port);
 }
 
+/* Sleep: backlight off and a black screen until AC/ON. */
+static void sleep_enter(void)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&con_lock, flags);
+	kbd.backlight = lcd_read_reg(R_BACKLIGHT);
+	lcd_reg(R_BACKLIGHT, 0);
+	lcd_fill(0);
+	asleep = true;
+	spin_unlock_irqrestore(&con_lock, flags);
+}
+
+static void sleep_leave(void)
+{
+	unsigned long flags;
+	int r, c;
+
+	spin_lock_irqsave(&con_lock, flags);
+	asleep = false;
+	lcd_fill(palette[DEF_BG]);
+	for (r = 0; r < ROWS; r++)
+		for (c = 0; c < COLS; c++)
+			shown[r][c] = (struct cell){ ' ', DEF_ATTR };
+	vt.shown_y = -1;
+	status_update();
+	con_flush();
+	lcd_reg(R_BACKLIGHT, kbd.backlight);
+	spin_unlock_irqrestore(&con_lock, flags);
+}
+
 /* Translate one key press into terminal input. */
 static void kbd_press(int key)
 {
@@ -726,6 +780,25 @@ static void kbd_press(int key)
 		return;
 	case K_CTRL:
 		kbd.ctrl = !kbd.ctrl;
+		return;
+	}
+
+	if (key == KEY(0, 0) && shift) {
+		kbd.shift = false;
+		kbd.ctrl = false;
+		kbd.held_key = -1;
+		sleep_enter();
+		return;
+	}
+
+	/* CTRL +/-: backlight; CTRL stays on for more steps */
+	if (kbd.ctrl && !alpha && (k->normal == '+' || k->normal == '-')) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&con_lock, flags);
+		backlight_step(k->normal == '+' ? 1 : -1);
+		spin_unlock_irqrestore(&con_lock, flags);
+		kbd.shift = false;
 		return;
 	}
 
@@ -785,6 +858,15 @@ static void kbd_poll(struct timer_list *t)
 
 	for (w = 0; w < 6; w++)
 		now[w] = __raw_readw(KEYSC_DATA + 2 * w);
+
+	if (asleep) {
+		/* only AC/ON (row 0 of column 0) wakes up */
+		if (now[0] & ~kbd.prev[0] & 1)
+			sleep_leave();
+		memcpy(kbd.prev, now, sizeof(now));
+		mod_timer(&kbd.timer, jiffies + msecs_to_jiffies(POLL_MS));
+		return;
+	}
 
 	for (w = 0; w < 6; w++) {
 		u16 pressed = now[w] & ~kbd.prev[w];
