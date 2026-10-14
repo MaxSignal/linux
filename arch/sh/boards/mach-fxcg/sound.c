@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Casio fx-CG: tones on the 3-pin port
+ * Casio fx-CG: tones on the 2.5 mm serial jack (the "3-pin port")
  *
- * The transmit pin of the 3-pin serial port is used as a plain output
+ * The transmit line of the serial port is used as a plain output
  * (port J bit 2), toggled at twice the tone's frequency by channel 2 of
- * the TMU, which the clock code leaves alone. Something to listen with
- * goes between the tip of the jack (transmit) and its sleeve (ground).
+ * the TMU, which the clock code leaves alone. An earphone on the jack
+ * plays the tones on one side.
  *
  * The port's output gate is port U bit 3, and bit 2 must be set too
  * (Simon Lothar's fx-CG20 register notes, "Accessing the 3pin serial
