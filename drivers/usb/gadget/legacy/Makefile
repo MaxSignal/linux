@@ -22,6 +22,7 @@ g_dbgp-y			:= dbgp.o
 g_nokia-y			:= nokia.o
 g_webcam-y			:= webcam.o
 g_ncm-y				:= ncm.o
+g_ncmdev-y			:= ncmdev.o
 g_acm_ms-y			:= acm_ms.o
 g_tcm_usb_gadget-y		:= tcm_usb_gadget.o
 
@@ -41,6 +42,7 @@ obj-$(CONFIG_USB_G_MULTI)	+= g_multi.o
 obj-$(CONFIG_USB_G_NOKIA)	+= g_nokia.o
 obj-$(CONFIG_USB_G_WEBCAM)	+= g_webcam.o
 obj-$(CONFIG_USB_G_NCM)		+= g_ncm.o
+obj-$(CONFIG_USB_G_NCMDEV)	+= g_ncmdev.o
 obj-$(CONFIG_USB_G_ACM_MS)	+= g_acm_ms.o
 obj-$(CONFIG_USB_GADGET_TARGET)	+= tcm_usb_gadget.o
 obj-$(CONFIG_USB_RAW_GADGET)	+= raw_gadget.o

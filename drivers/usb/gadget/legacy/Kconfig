@@ -203,6 +203,18 @@ config USB_G_NCM
 	  Say "y" to link the driver statically, or "m" to build a
 	  dynamically linked module called "g_ncm".
 
+config USB_G_NCMDEV
+	tristate "NCM device for a network stack in user space"
+	depends on !USB_CONFIGFS
+	select USB_LIBCOMPOSITE
+	help
+	  A CDC NCM network adapter for the host whose transfer blocks
+	  are read and written through /dev/ncm, by a network stack in
+	  user space. Needs no networking in the kernel.
+
+	  Say "y" to link the driver statically, or "m" to build a
+	  dynamically linked module called "g_ncmdev".
+
 config USB_GADGETFS
 	tristate "Gadget Filesystem"
 	help
