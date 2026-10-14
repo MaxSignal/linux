@@ -3,14 +3,13 @@
  * Casio fx-CG10/fx-CG20 (Prizm) support
  *
  * SH7305 @ 58 MHz, 2 MiB of RAM at 0x08000000, 32 MiB NOR flash
- * (the Casio OS's; the free part after its image can hold a kernel that
- * runs in place, see xip.c), R61524 384x216 LCD.
+ * (the Casio OS's; two areas it leaves free can hold part of the
+ * kernel's code, see FXCG_ROM_TEXT), R61524 384x216 LCD.
  *
  * The kernel is started by the fxcg-linux loader add-in, which takes
  * the machine over from the Casio OS: interrupts and the MMU are off
- * and the zImage has been copied to RAM, or the kernel runs from the
- * flash. Rebooting goes through a CPU reset, which brings the Casio OS
- * back.
+ * and the zImage has been copied to RAM. Rebooting goes through a CPU
+ * reset, which brings the Casio OS back.
  */
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -28,8 +27,7 @@ DEFINE_MUTEX(fxcg_flash_lock);
 
 /*
  * What the loader asks for, at the end of the IL memory: "fxcgMODE" and
- * 1 to install the kernel that runs in place from the flash, 2 to remove
- * it. It becomes "fxcg.boot=install" or "fxcg.boot=remove" on the command
+ * 1 to install the flash part of the kernel (flash.bin), 2 to remove it. It becomes "fxcg.boot=install" or "fxcg.boot=remove" on the command
  * line (for the init scripts), once: the word is cleared.
  */
 #define FXCG_BOOT_MODE	0xe5200ff0

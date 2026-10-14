@@ -1,32 +1,29 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Casio fx-CG: install the kernel that runs in place, and its romfs, in
- * the free flash below 0xb40000, remove it, or start it
+ * Casio fx-CG: install the flash part of a kernel built with
+ * CONFIG_FXCG_ROM_TEXT, or remove it
  *
- *	cat /mnt/fls/xip.bin > /dev/xipflash	install (or update)
- *	echo -n fxcgRMV1 > /dev/xipflash	remove: erase all of it
- *	echo -n fxcgBOOT > /dev/xipflash	start it, in place of this kernel
+ *	cat /mnt/fls/flash.bin > /dev/xipflash	install (or update)
+ *	echo -n fxcgRMV1 > /dev/xipflash	remove: erase it all
  *
- * xip.bin (scripts/mkxip.py in fxcg20-Linux-bundle) is the flash
- * from a sector boundary up to 0xb40000: a copy of the 64-byte header
- * ("fxcgXIP1", see xip.c), the romfs 256 bytes further, the kernel, and
- * the header again in the last 256 bytes, where the loader and the XIP
- * kernel read it. Writing streams it in place: each sector is erased
- * when the data reaches it, then programmed. Closing the file checks the
- * header and the CRCs of what is in the flash.
+ * The flash part goes to the two erased areas that the Casio OS neither
+ * checks at boot nor uses for its storage memory, 0xc00000-0xc7ffff and
+ * 0xb20000-0xb3ffff. flash.bin (fxcg20-Linux-bundle scripts/romkernel.py)
+ * is a 64-byte index ("fxcgROMI", the count, the address and length of
+ * each area's image, CRC-32) and the images; each image starts with a
+ * 64-byte header ("fxcgROM1", address, length, the CRC-32 of the rest,
+ * CRC-32 of the header).
  *
- * Only these sectors may be erased: those already erased, and those of
- * the image the flash holds now, as either of its two headers describes
- * it. Anything else (the Casio OS) makes the write fail before the flash
- * is touched. Sectors are written in increasing order, so the old header
- * at the top goes last and the new one at the bottom comes first: a
- * reset at any point leaves one of them describing what is there, and
- * installing again works. Sectors of a bigger image installed before are
- * erased once the new one checks out, and removing erases every sector
- * of the image: the flash is then erased again, as before the install.
+ * Nothing else is ever erased or programmed: an area may be written only
+ * if it is erased or starts with such a header (an earlier install),
+ * which is checked for both areas before the flash is touched. Each
+ * image is written from its start, header first, so that an install
+ * that is cut short leaves an area that is erased or marked as ours,
+ * and installing again works. Closing the file checks the CRCs of what
+ * the flash holds.
  *
- * The kernel doing this runs from RAM (not CONFIG_XIP_KERNEL): while the
- * flash is programmed it cannot be read.
+ * This kernel runs from RAM (FXCG_ROM_TEXT is off): while the flash is
+ * programmed it cannot be read.
  */
 #include <linux/crc32.h>
 #include <linux/fs.h>
@@ -39,75 +36,74 @@
 #include <linux/unaligned.h>
 #include <mach/fxcg.h>
 
-#define XIP_END		0x00b40000UL	/* the language data starts here */
-#define XIP_HEADER	(XIP_END - 0x100)
-#define XIP_LOWEST	0x00600000UL	/* never below, whatever the flash says */
-#define HEADER_SIZE	64
-#define FLASH		0x80000000UL
-#define IL_MEM		0xe5200000UL	/* on-chip, for the hand-over */
+#define FLASH		0x80000000UL	/* P1: cached view */
+#define HDR		64
+#define NR_AREAS	2
 
-extern const u8 fxcg_handoff_start[], fxcg_handoff_end[];
-
-struct xip_header {
-	u32 kstart, ksize, kcrc, rstart, rsize, rcrc, entry;
+static const struct {
+	unsigned long start, size;
+} areas[NR_AREAS] = {
+	{ 0x00c00000, 0x80000 },
+	{ 0x00b20000, 0x20000 },
 };
 
-static bool parse_header(const u8 *h, struct xip_header *x)
+static bool crc_ok(const u8 *h)
 {
-	if (memcmp(h, "fxcgXIP1", 8) || get_unaligned_be32(h + 8) != HEADER_SIZE ||
-	    ~crc32_le(~0, h, 60) != get_unaligned_be32(h + 60))
-		return false;
-	x->kstart = get_unaligned_be32(h + 12);
-	x->ksize = get_unaligned_be32(h + 16);
-	x->kcrc = get_unaligned_be32(h + 20);
-	x->rstart = get_unaligned_be32(h + 24);
-	x->rsize = get_unaligned_be32(h + 28);
-	x->rcrc = get_unaligned_be32(h + 32);
-	x->entry = get_unaligned_be32(h + 36);
-	/* the image starts 256 bytes before the romfs, on a sector */
-	return x->rstart >= XIP_LOWEST + 0x100 &&
-	       (x->rstart - 0x100) % FXCG_FLASH_SECTOR == 0 &&
-	       x->rstart + x->rsize <= x->kstart &&
-	       x->kstart % FXCG_FLASH_SECTOR == 0 &&
-	       x->kstart + x->ksize <= XIP_HEADER &&
-	       x->entry >= x->kstart && x->entry < x->kstart + x->ksize;
+	return ~crc32_le(~0, h, HDR - 4) == get_unaligned_be32(h + HDR - 4);
 }
 
-static unsigned long image_start(const struct xip_header *x)
+/* Does area i start with a header of ours (whatever is after it)? */
+static bool area_ours(int i)
 {
-	return x->rstart - 0x100;
+	const u8 *h = (const u8 *)(FLASH + areas[i].start);
+
+	return !memcmp(h, "fxcgROM1", 8) && crc_ok(h) &&
+	       get_unaligned_be32(h + 8) == areas[i].start;
+}
+
+static bool area_blank(int i)
+{
+	return fxcg_nor_blank(areas[i].start, areas[i].size);
+}
+
+/* Is what area i holds a complete image (header and CRC)? */
+static bool area_intact(int i)
+{
+	const u8 *h = (const u8 *)(FLASH + areas[i].start);
+	u32 len = get_unaligned_be32(h + 12);
+
+	return area_ours(i) && len >= HDR && len <= areas[i].size &&
+	       ~crc32_le(~0, h + HDR, len - HDR) == get_unaligned_be32(h + 16);
+}
+
+static int erase_area(int i)
+{
+	unsigned long s, end = areas[i].start + areas[i].size;
+	int ret;
+
+	for (s = areas[i].start; s < end; s += FXCG_FLASH_SECTOR)
+		if (!fxcg_nor_blank(s, FXCG_FLASH_SECTOR)) {
+			ret = fxcg_nor_erase(s, areas[i].start, end);
+			if (ret)
+				return ret;
+		}
+	return 0;
 }
 
 static struct {
-	unsigned long start;		/* of the image being written */
-	unsigned long pos;		/* next flash address to program */
-	unsigned long erased;		/* sectors below this one are done */
-	unsigned long old_lo;		/* the image there was: [old_lo, END) */
-	u8 head[HEADER_SIZE];		/* collecting the first header */
-	unsigned int nhead;
-	bool removed;
+	u8 index[HDR];			/* collecting the index */
+	unsigned int nindex;
+	bool started, done, failed;
+	int area;			/* being written */
+	unsigned long pos;		/* next address to program in it */
+	unsigned long end;		/* end of its image */
+	unsigned long len[NR_AREAS];
 	u8 odd;				/* a byte waiting for its pair */
-	bool has_odd, failed;
+	bool has_odd;
 	u8 *buf;
 } st;
 
 static DEFINE_MUTEX(xip_open_lock);
-
-/* Where the image in the flash now begins (END if there is none). */
-static unsigned long current_image(void)
-{
-	struct xip_header x;
-	unsigned long lo = XIP_END;
-
-	if (parse_header((const u8 *)(FLASH + XIP_HEADER), &x))
-		lo = image_start(&x);
-	/* an install that stopped half way: its first header */
-	for (unsigned long s = XIP_LOWEST; s < XIP_END; s += FXCG_FLASH_SECTOR)
-		if (parse_header((const u8 *)(FLASH + s), &x) &&
-		    image_start(&x) == s && s < lo)
-			lo = s;
-	return lo;
-}
 
 static int xip_open(struct inode *inode, struct file *file)
 {
@@ -121,114 +117,95 @@ static int xip_open(struct inode *inode, struct file *file)
 		mutex_unlock(&xip_open_lock);
 		return -ENOMEM;
 	}
-	mutex_lock(&fxcg_flash_lock);
-	st.old_lo = current_image();
-	mutex_unlock(&fxcg_flash_lock);
 	return nonseekable_open(inode, file);
 }
 
-/* The first header is in: check where the image goes before anything. */
-static int start_image(void)
+/* Both areas must be erased or ours, before anything is written. */
+static int check_areas(void)
 {
-	struct xip_header x;
-	unsigned long s;
+	int i;
 
-	if (!parse_header(st.head, &x)) {
-		pr_err("xipflash: not an XIP image\n");
-		return -EINVAL;
-	}
-	for (s = image_start(&x); s < XIP_END; s += FXCG_FLASH_SECTOR)
-		if (s < st.old_lo && !fxcg_nor_blank(s, FXCG_FLASH_SECTOR)) {
-			pr_err("xipflash: the flash at %#lx is in use, not erased\n", s);
+	for (i = 0; i < NR_AREAS; i++)
+		if (!area_blank(i) && !area_ours(i)) {
+			pr_err("xipflash: the flash at %#lx is in use, not erased\n",
+			       areas[i].start);
 			return -ENOSPC;
 		}
-	st.start = st.pos = st.erased = image_start(&x);
-	pr_info("xipflash: writing %lu KiB at %#lx\n",
-		(XIP_END - st.start) >> 10, st.start);
 	return 0;
 }
 
-/* Program n bytes (even) at st.pos, erasing sectors as it gets to them. */
+static int start_install(void)
+{
+	int i, ret;
+
+	if (!crc_ok(st.index) ||
+	    get_unaligned_be32(st.index + 8) != NR_AREAS) {
+		pr_err("xipflash: not a flash image\n");
+		return -EINVAL;
+	}
+	for (i = 0; i < NR_AREAS; i++) {
+		if (get_unaligned_be32(st.index + 12 + 8 * i) != areas[i].start)
+			return -EINVAL;
+		st.len[i] = get_unaligned_be32(st.index + 16 + 8 * i);
+		if (st.len[i] < HDR || st.len[i] > areas[i].size || st.len[i] & 1)
+			return -EINVAL;
+	}
+	ret = check_areas();
+	if (ret)
+		return ret;
+	pr_info("xipflash: writing %lu + %lu bytes\n", st.len[0], st.len[1]);
+	st.started = true;
+	st.area = -1;
+	return 0;
+}
+
+/* Program n bytes (even), moving to the next area as each one fills. */
 static int put(const u8 *p, unsigned long n)
 {
 	int ret;
 
-	if (n > XIP_END - st.pos)
-		return -EFBIG;
-	while (st.erased < st.pos + n) {
-		if (!fxcg_nor_blank(st.erased, FXCG_FLASH_SECTOR)) {
-			ret = fxcg_nor_erase(st.erased, st.start, XIP_END);
+	while (n) {
+		unsigned long k;
+
+		if (st.area < 0 || st.pos == st.end) {
+			if (++st.area == NR_AREAS)
+				return -EFBIG;
+			ret = erase_area(st.area);
 			if (ret)
 				return ret;
+			st.pos = areas[st.area].start;
+			st.end = st.pos + st.len[st.area];
 		}
-		st.erased += FXCG_FLASH_SECTOR;
+		k = min(n, st.end - st.pos);
+		ret = fxcg_nor_program(st.pos, p, k, areas[st.area].start,
+				       areas[st.area].start + areas[st.area].size);
+		if (ret)
+			return ret;
+		st.pos += k;
+		p += k;
+		n -= k;
 	}
-	ret = fxcg_nor_program(st.pos, p, n, st.start, XIP_END);
-	if (!ret)
-		st.pos += n;
-	return ret;
-}
-
-/* Erase the sectors in [lo, hi) that are not erased (all ours). */
-static int erase_range(unsigned long lo, unsigned long hi)
-{
-	int ret;
-
-	for (; lo < hi; lo += FXCG_FLASH_SECTOR)
-		if (!fxcg_nor_blank(lo, FXCG_FLASH_SECTOR)) {
-			ret = fxcg_nor_erase(lo, lo, XIP_END);
-			if (ret)
-				return ret;
-		}
 	return 0;
 }
 
-static int remove_image(void)
+static int remove_all(void)
 {
-	int ret;
+	int i, ret;
 
-	if (st.old_lo == XIP_END) {
-		pr_info("xipflash: nothing to remove\n");
-		st.removed = true;
-		return 0;
+	for (i = 0; i < NR_AREAS; i++) {
+		if (area_blank(i))
+			continue;
+		if (!area_ours(i)) {
+			pr_warn("xipflash: the flash at %#lx is not ours, left alone\n",
+				areas[i].start);
+			continue;
+		}
+		ret = erase_area(i);
+		if (ret)
+			return ret;
 	}
-	ret = erase_range(st.old_lo, XIP_END);
-	if (ret)
-		return ret;
-	pr_info("xipflash: removed, %#lx-%#lx erased\n", st.old_lo, XIP_END);
-	st.removed = true;
+	pr_info("xipflash: removed\n");
 	return 0;
-}
-
-/* The kernel the flash holds, checked, or 0. */
-static unsigned long installed_entry(void)
-{
-	struct xip_header x;
-
-	if (!parse_header((const u8 *)(FLASH + XIP_HEADER), &x) ||
-	    ~crc32_le(~0, (const u8 *)(FLASH + x.kstart), x.ksize) != x.kcrc ||
-	    ~crc32_le(~0, (const u8 *)(FLASH + x.rstart), x.rsize) != x.rcrc)
-		return 0;
-	return x.entry;
-}
-
-/* Start the kernel in the flash: no return if it is there. */
-static int boot_image(void)
-{
-	unsigned long entry = installed_entry();
-	void (*handoff)(unsigned long);
-
-	if (!entry) {
-		pr_err("xipflash: no kernel in the flash to start\n");
-		return -ENOENT;
-	}
-	pr_info("xipflash: starting the kernel at %#lx\n", entry);
-	local_irq_disable();
-	memcpy((void *)IL_MEM, fxcg_handoff_start,
-	       fxcg_handoff_end - fxcg_handoff_start);
-	handoff = (void (*)(unsigned long))IL_MEM;
-	handoff(entry);
-	unreachable();
 }
 
 static ssize_t xip_write(struct file *file, const char __user *ubuf,
@@ -237,7 +214,7 @@ static ssize_t xip_write(struct file *file, const char __user *ubuf,
 	size_t done = 0;
 	int ret = 0;
 
-	if (st.failed || st.removed)
+	if (st.failed || st.done)
 		return -EIO;
 	mutex_lock(&fxcg_flash_lock);
 	while (done < len && !ret) {
@@ -250,24 +227,26 @@ static ssize_t xip_write(struct file *file, const char __user *ubuf,
 			break;
 		}
 		done += n;
-		if (!st.start) {	/* the first header, before anything */
-			unsigned int m = min_t(size_t, HEADER_SIZE - st.nhead, n);
+		if (!st.started) {
+			unsigned int m = min_t(size_t, HDR - st.nindex, n);
 
-			memcpy(st.head + st.nhead, p, m);
-			st.nhead += m;
+			memcpy(st.index + st.nindex, p, m);
+			st.nindex += m;
 			p += m;
 			n -= m;
-			if (st.nhead >= 8 && !memcmp(st.head, "fxcgRMV1", 8)) {
-				ret = remove_image();
+			if (st.nindex >= 8 && !memcmp(st.index, "fxcgRMV1", 8)) {
+				ret = remove_all();
+				st.done = true;
 				break;
 			}
-			if (st.nhead >= 8 && !memcmp(st.head, "fxcgBOOT", 8)) {
-				ret = boot_image();	/* returns if it cannot */
+			if (st.nindex >= 8 && memcmp(st.index, "fxcgROMI", 8)) {
+				pr_err("xipflash: not a flash image\n");
+				ret = -EINVAL;
 				break;
 			}
-			if (st.nhead < HEADER_SIZE)
+			if (st.nindex < HDR)
 				continue;
-			ret = start_image() ?: put(st.head, HEADER_SIZE);
+			ret = start_install();
 			if (ret)
 				break;
 		}
@@ -289,35 +268,29 @@ static ssize_t xip_write(struct file *file, const char __user *ubuf,
 	return ret ? ret : done;
 }
 
-/* At close: is what the flash holds now the whole image, intact? */
+/* At close: does the flash hold the whole image, intact? */
 static int xip_flush(struct file *file, fl_owner_t id)
 {
-	struct xip_header x;
-	int ret = 0;
+	int i, ret = 0;
 
-	if ((!st.nhead && !st.failed) || st.removed)
-		return 0;	/* nothing written through this file (yet) */
 	if (st.failed)
 		return -EIO;	/* already said why */
-	if (st.has_odd || !st.start || st.pos != XIP_END) {
-		pr_err("xipflash: incomplete image (up to %#lx of %#lx)\n",
-		       st.pos, XIP_END);
+	if (st.done || !st.nindex)
+		return 0;
+	if (!st.started || st.has_odd || st.area != NR_AREAS - 1 ||
+	    st.pos != st.end) {
+		pr_err("xipflash: incomplete image\n");
 		return -EIO;
 	}
 	mutex_lock(&fxcg_flash_lock);
-	if (!installed_entry() ||
-	    !parse_header((const u8 *)(FLASH + XIP_HEADER), &x) ||
-	    image_start(&x) != st.start)
-		ret = -EIO;
-	/* a bigger image there was: its sectors below this one */
-	if (!ret && st.old_lo < st.start)
-		ret = erase_range(st.old_lo, st.start);
+	for (i = 0; i < NR_AREAS; i++)
+		if (!area_intact(i))
+			ret = -EIO;
 	mutex_unlock(&fxcg_flash_lock);
 	if (ret)
-		pr_err("xipflash: the image in the flash does not check out\n");
+		pr_err("xipflash: the flash does not check out\n");
 	else
-		pr_info("xipflash: kernel at %#x, romfs at %#x: installed\n",
-			x.kstart, x.rstart);
+		pr_info("xipflash: installed\n");
 	return ret;
 }
 

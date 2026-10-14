@@ -21,6 +21,14 @@ OUTPUT_ARCH(sh)
 ENTRY(_start)
 SECTIONS
 {
+#ifdef CONFIG_FXCG_ROM_TEXT
+	/*
+	 * Code and constants of chosen objects, at addresses in the flash
+	 * (output sections .fxcg.rom0, .fxcg.rom1): before the rules below,
+	 * so that their input sections go there first.
+	 */
+	INCLUDE fxcg-rom.lds
+#endif
 	. = PAGE_OFFSET + MEMORY_OFFSET + PHYSICAL_OFFSET + CONFIG_ZERO_PAGE_OFFSET;
 
 	_text = .;		/* Text and read-only data */

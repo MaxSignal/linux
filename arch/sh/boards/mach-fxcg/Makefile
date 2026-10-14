@@ -4,5 +4,4 @@
 #
 obj-y	:= setup.o console.o
 obj-$(CONFIG_FXCG_STORAGE)	+= storage.o
-obj-$(CONFIG_FXCG_XIP_ROMFS)	+= xip.o
-obj-$(CONFIG_FXCG_XIP_INSTALL)	+= nor.o xipflash.o handoff.o
+obj-$(CONFIG_FXCG_ROM_INSTALL)	+= nor.o xipflash.o

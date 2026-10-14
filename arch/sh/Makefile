@@ -77,6 +77,7 @@ cflags-y	+= $(call cc-option,-mno-fdpic)
 cflags-y	+= $(isaflags-y) -ffreestanding
 
 OBJCOPYFLAGS	:= -O binary -R .note -R .note.gnu.build-id -R .comment \
+		   -R .fxcg.rom0 -R .fxcg.rom1 \
 		   -R .stab -R .stabstr -S
 
 # Give the various platforms the opportunity to set default image types

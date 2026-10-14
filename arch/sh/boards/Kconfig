@@ -387,27 +387,32 @@ config FXCG_STORAGE
 	  NOR flash through the Casio OS's own flash translation layer
 	  format ("mount -t fls fls /mnt/fls"). The flash is never written.
 
-config FXCG_XIP_ROMFS
-	bool "Root file system in place in the flash"
-	depends on SH_FXCG && XIP_KERNEL && MTD_PHYSMAP && MTD_ROM
+config FXCG_ROM_INSTALL
+	bool "Installer for the flash part of the kernel"
+	depends on SH_FXCG && !XIP_KERNEL && !FXCG_ROM_TEXT
 	select CRC32
 	help
-	  With the kernel running in place from the NOR flash, make the
-	  romfs image packed below it (found through the header at the end
-	  of the free flash, before 0xb40000) the first MTD device, a ROM,
-	  so that programs also run straight from the flash:
-	  "root=mtd0 rootfstype=romfs".
+	  /dev/xipflash: writing flash.bin to it ("cat flash.bin >
+	  /dev/xipflash") installs the flash part of a kernel built with
+	  FXCG_ROM_TEXT in the two free flash areas, where its RAM part
+	  (linuxf.bin) expects it; "echo -n fxcgRMV1 > /dev/xipflash"
+	  erases it. Only those two areas, and only when they are erased or
+	  hold such an image, are ever written; closing the file checks the
+	  result.
 
-config FXCG_XIP_INSTALL
-	bool "Installer for the kernel that runs in place"
+config FXCG_ROM_TEXT
+	bool "Part of the kernel's code in the free flash"
 	depends on SH_FXCG && !XIP_KERNEL
-	select CRC32
 	help
-	  /dev/xipflash: writing linux-xip.bin to it ("cat linux-xip.bin >
-	  /dev/xipflash") puts the kernel that runs in place and its romfs
-	  in the free flash below 0xb40000, where the loader finds them.
-	  Only sectors that are erased or hold the previous such image are
-	  ever erased; closing the file checks the result.
+	  Link the code and constants (.text, .rodata) of chosen object
+	  files at the two erased flash areas that neither the Casio OS's
+	  boot check nor its storage memory use, 0xc00000-0xc7ffff and
+	  0xb20000-0xb3ffff, so that they run from the flash and take no
+	  RAM; the rest of the kernel is loaded into RAM as usual. Which
+	  files go there comes from fxcg-rom.lds in the build directory
+	  (written by fxcg20-Linux-bundle's scripts/build-romkernel.sh), and
+	  vmlinux.bin leaves those sections out: the flash part has to be
+	  installed separately, from the same build.
 
 config FXCG_DEBUG_MARKERS
 	bool "Show the boot progress on the LCD"
