@@ -120,7 +120,7 @@ static inline struct hlist_bl_head *d_hash(unsigned long hashlen)
 		runtime_const_shift_right_32(hashlen, d_hash_shift);
 }
 
-#define IN_LOOKUP_SHIFT 10
+#define IN_LOOKUP_SHIFT (IS_ENABLED(CONFIG_BASE_SMALL) ? 4 : 10)
 static struct hlist_bl_head in_lookup_hashtable[1 << IN_LOOKUP_SHIFT];
 
 static inline struct hlist_bl_head *in_lookup_hash(const struct dentry *parent,

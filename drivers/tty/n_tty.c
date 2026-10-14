@@ -56,7 +56,7 @@
  */
 #define WAKEUP_CHARS 256
 
-#define N_TTY_BUF_SIZE 4096
+#define N_TTY_BUF_SIZE (IS_ENABLED(CONFIG_BASE_SMALL) ? 1024 : 4096)
 
 /*
  * This defines the low- and high-watermarks for throttling and

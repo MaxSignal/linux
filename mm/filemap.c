@@ -1069,7 +1069,7 @@ EXPORT_SYMBOL(filemap_invalidate_unlock_two);
  * at a cost of "thundering herd" phenomena during rare hash
  * collisions.
  */
-#define PAGE_WAIT_TABLE_BITS 8
+#define PAGE_WAIT_TABLE_BITS (IS_ENABLED(CONFIG_BASE_SMALL) ? 4 : 8)
 #define PAGE_WAIT_TABLE_SIZE (1 << PAGE_WAIT_TABLE_BITS)
 static wait_queue_head_t folio_wait_table[PAGE_WAIT_TABLE_SIZE] __cacheline_aligned;
 

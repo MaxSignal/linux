@@ -14,7 +14,7 @@ struct ucounts init_ucounts = {
 	.count = RCUREF_INIT(1),
 };
 
-#define UCOUNTS_HASHTABLE_BITS 10
+#define UCOUNTS_HASHTABLE_BITS (IS_ENABLED(CONFIG_BASE_SMALL) ? 4 : 10)
 #define UCOUNTS_HASHTABLE_ENTRIES (1 << UCOUNTS_HASHTABLE_BITS)
 static struct hlist_nulls_head ucounts_hashtable[UCOUNTS_HASHTABLE_ENTRIES] = {
 	[0 ... UCOUNTS_HASHTABLE_ENTRIES - 1] = HLIST_NULLS_HEAD_INIT(0)

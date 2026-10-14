@@ -99,6 +99,12 @@
 #include "percpu-internal.h"
 
 /*
+ * BASE_SMALL on UP: the first chunk is a page. The smallest systems use
+ * well under 1 KiB of it; more chunks come when needed.
+ */
+#define PCPU_UP_SMALL	(IS_ENABLED(CONFIG_BASE_SMALL) && !IS_ENABLED(CONFIG_SMP))
+
+/*
  * The slots are sorted by the size of the biggest continuous free area.
  * 1-31 bytes share the same slot.
  */
@@ -2595,9 +2601,9 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	PCPU_SETUP_BUG_ON(offset_in_page(base_addr));
 	PCPU_SETUP_BUG_ON(ai->unit_size < size_sum);
 	PCPU_SETUP_BUG_ON(offset_in_page(ai->unit_size));
-	PCPU_SETUP_BUG_ON(ai->unit_size < PCPU_MIN_UNIT_SIZE);
+	PCPU_SETUP_BUG_ON(!PCPU_UP_SMALL && ai->unit_size < PCPU_MIN_UNIT_SIZE);
 	PCPU_SETUP_BUG_ON(!IS_ALIGNED(ai->unit_size, PCPU_BITMAP_BLOCK_SIZE));
-	PCPU_SETUP_BUG_ON(ai->dyn_size < PERCPU_DYNAMIC_EARLY_SIZE);
+	PCPU_SETUP_BUG_ON(!PCPU_UP_SMALL && ai->dyn_size < PERCPU_DYNAMIC_EARLY_SIZE);
 	PCPU_SETUP_BUG_ON(!IS_ALIGNED(ai->reserved_size, PCPU_MIN_ALLOC_SIZE));
 	PCPU_SETUP_BUG_ON(!(IS_ALIGNED(PCPU_BITMAP_BLOCK_SIZE, PAGE_SIZE) ||
 			    IS_ALIGNED(PAGE_SIZE, PCPU_BITMAP_BLOCK_SIZE)));
@@ -3333,7 +3339,7 @@ void __init setup_per_cpu_areas(void)
  */
 void __init setup_per_cpu_areas(void)
 {
-	const size_t unit_size =
+	const size_t unit_size = PCPU_UP_SMALL ? PAGE_SIZE :
 		roundup_pow_of_two(max_t(size_t, PCPU_MIN_UNIT_SIZE,
 					 PERCPU_DYNAMIC_RESERVE));
 	struct pcpu_alloc_info *ai;
