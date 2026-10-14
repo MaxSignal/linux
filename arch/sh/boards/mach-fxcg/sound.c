@@ -2,16 +2,15 @@
 /*
  * Casio fx-CG: tones on the 2.5 mm serial jack (the "3-pin port")
  *
- * Both lines of the serial port are used as plain outputs, toggled
- * together at twice the tone's frequency by channel 2 of the TMU, which
- * the clock code leaves alone: transmit (port J bit 2, the tip of the
- * jack, left of an earphone) and receive (port L bit 2, the ring, right).
+ * The transmit line of the serial port is used as a plain output
+ * (port J bit 2), toggled at twice the tone's frequency by channel 2 of
+ * the TMU, which the clock code leaves alone. That line is the tip of
+ * the jack: an earphone plays the tones on its left side. (The receive
+ * line can be driven too, but much harder: far too loud.)
  *
- * The port's output gate is port U bit 3, and bit 2 must be set too;
- * the receive line is also on port L bit 2, which can be an output
+ * The port's output gate is port U bit 3, and bit 2 must be set too
  * (Simon Lothar's fx-CG20 register notes, "Accessing the 3pin serial
- * lines directly" and the port table). The pins are given back as they
- * were after a tone.
+ * lines directly"). The pins are given back as they were after a tone.
  */
 #include <linux/clk.h>
 #include <linux/interrupt.h>
@@ -23,12 +22,9 @@
 
 #define PJCR		((void __iomem *)0xa4050110)	/* 2 bits per pin */
 #define PJDR		((void __iomem *)0xa4050130)
-#define PLCR		((void __iomem *)0xa4050114)
-#define PLDR		((void __iomem *)0xa4050134)
 #define PUCR		((void __iomem *)0xa4050142)
 #define PUDR		((void __iomem *)0xa4050162)
 #define TX_BIT		2				/* port J */
-#define RX_BIT		2				/* port L */
 #define GATE_BITS	0x0c				/* port U bits 3, 2 */
 
 #define TSTR		((void __iomem *)0xa4490004)
@@ -44,14 +40,13 @@ static DEFINE_SPINLOCK(snd_lock);
 static struct timer_list snd_stop_timer;
 static unsigned long tmu_rate;		/* the TMU counts at P/4 */
 static bool playing;
-static u16 saved_pjcr, saved_plcr, saved_pucr;
+static u16 saved_pjcr, saved_pucr;
 static u8 saved_pudr;
 
 static irqreturn_t snd_interrupt(int irq, void *dev_id)
 {
 	__raw_writew(TCR_UNIE, TCR2);		/* clears UNF */
 	__raw_writeb(__raw_readb(PJDR) ^ (1 << TX_BIT), PJDR);
-	__raw_writeb(__raw_readb(PLDR) ^ (1 << RX_BIT), PLDR);
 	return IRQ_HANDLED;
 }
 
@@ -63,7 +58,6 @@ static void snd_off(void)
 	__raw_writeb(__raw_readb(TSTR) & ~TSTR_STR2, TSTR);
 	__raw_writew(0, TCR2);
 	__raw_writew(saved_pjcr, PJCR);
-	__raw_writew(saved_plcr, PLCR);
 	__raw_writeb((__raw_readb(PUDR) & ~GATE_BITS) | (saved_pudr & GATE_BITS), PUDR);
 	__raw_writew(saved_pucr, PUCR);
 	playing = false;
@@ -76,17 +70,13 @@ static void snd_on(unsigned int hz)
 
 	if (!playing) {
 		saved_pjcr = __raw_readw(PJCR);
-		saved_plcr = __raw_readw(PLCR);
 		saved_pucr = __raw_readw(PUCR);
 		saved_pudr = __raw_readb(PUDR);
 		/* port U bit 3 an output, then the gate open */
 		__raw_writew((saved_pucr & ~(3 << 6)) | (1 << 6), PUCR);
 		__raw_writeb(saved_pudr | GATE_BITS, PUDR);
-		/* both lines outputs, at the same level */
-		__raw_writeb(__raw_readb(PLDR) & ~(1 << RX_BIT), PLDR);
-		__raw_writeb(__raw_readb(PJDR) & ~(1 << TX_BIT), PJDR);
+		/* the transmit pin an output */
 		__raw_writew((saved_pjcr & ~(3 << 2 * TX_BIT)) | (1 << 2 * TX_BIT), PJCR);
-		__raw_writew((saved_plcr & ~(3 << 2 * RX_BIT)) | (1 << 2 * RX_BIT), PLCR);
 	}
 	__raw_writeb(__raw_readb(TSTR) & ~TSTR_STR2, TSTR);
 	__raw_writel(count, TCOR2);
