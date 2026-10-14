@@ -13,12 +13,15 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/jiffies.h>
+#include <linux/kd.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/timer.h>
+#include <linux/timex.h>
 #include <linux/tty.h>
 #include <linux/tty_driver.h>
 #include <linux/tty_flip.h>
+#include <linux/uaccess.h>
 #include <asm/barrier.h>
 #include <mach/fxcg.h>
 
@@ -549,6 +552,8 @@ static void vt_putc(u8 ch)
 		} while (vt.x % 8 && !vt.wrap_pending);
 		break;
 	case '\a':
+		fxcg_tone(750, 125);	/* the bell of a Linux console */
+		break;
 	case 0:
 		break;
 	default:
@@ -949,12 +954,32 @@ static unsigned int fxcg_tty_write_room(struct tty_struct *tty)
 	return 4096;
 }
 
+/* the PC speaker ioctls of a Linux console (BusyBox beep): the 3-pin port */
+static int fxcg_tty_ioctl(struct tty_struct *tty, unsigned int cmd,
+			  unsigned long arg)
+{
+	unsigned int count = arg & 0xffff, ms = arg >> 16;
+
+	switch (cmd) {
+	case KDGKBTYPE:
+		return put_user(KB_101, (char __user *)arg);
+	case KIOCSOUND:
+		fxcg_tone(arg ? PIT_TICK_RATE / arg : 0, 0);
+		return 0;
+	case KDMKTONE:
+		fxcg_tone(count && ms ? PIT_TICK_RATE / count : 0, ms);
+		return 0;
+	}
+	return -ENOIOCTLCMD;
+}
+
 static const struct tty_operations fxcg_tty_ops = {
 	.install	= fxcg_tty_install,
 	.open		= fxcg_tty_open,
 	.close		= fxcg_tty_close,
 	.write		= fxcg_tty_write,
 	.write_room	= fxcg_tty_write_room,
+	.ioctl		= fxcg_tty_ioctl,
 };
 
 static const struct tty_port_operations fxcg_port_ops;

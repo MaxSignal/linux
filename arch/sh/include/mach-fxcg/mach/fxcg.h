@@ -7,6 +7,8 @@
 #define FXCG_LCD_HEIGHT		216
 
 void fxcg_console_init(void);
+/* a tone on the 3-pin port: hz 0 is silence, ms 0 until the next call */
+void fxcg_tone(unsigned int hz, unsigned int ms);
 
 /* the NOR flash */
 #define FXCG_FLASH_SECTOR	0x20000		/* erase unit */

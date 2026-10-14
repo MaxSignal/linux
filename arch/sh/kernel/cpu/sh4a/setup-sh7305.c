@@ -22,8 +22,9 @@
 #define INTC_IMR(n)	(0xa4080080 + 4 * (n))	/* IMR0..IMR12, 8-bit */
 #define MSTPCR0		0xa4150030
 
+/* channel 2 makes the tones of mach-fxcg/sound.c */
 static struct sh_timer_config tmu0_platform_data = {
-	.channels_mask = 7,
+	.channels_mask = 3,
 };
 
 static struct resource tmu0_resources[] = {
