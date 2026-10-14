@@ -31,7 +31,7 @@
 #include <linux/sizes.h>
 #include "ioremap.h"
 
-pgd_t swapper_pg_dir[PTRS_PER_PGD];
+pgd_t swapper_pg_dir[SWAPPER_PGD_ENTRIES];
 
 void __init generic_mem_init(void)
 {

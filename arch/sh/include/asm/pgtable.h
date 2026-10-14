@@ -105,7 +105,12 @@ static inline void update_mmu_cache_range(struct vm_fault *vmf,
 #define update_mmu_cache(vma, addr, ptep) \
 	update_mmu_cache_range(NULL, vma, addr, ptep, 1)
 
-extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
+#ifdef CONFIG_MMU
+#define SWAPPER_PGD_ENTRIES	PTRS_PER_PGD
+#else
+#define SWAPPER_PGD_ENTRIES	1	/* only init_mm.pgd points at it */
+#endif
+extern pgd_t swapper_pg_dir[SWAPPER_PGD_ENTRIES];
 extern void paging_init(void);
 extern void page_table_range_init(unsigned long start, unsigned long end,
 				  pgd_t *pgd);

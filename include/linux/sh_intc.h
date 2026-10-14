@@ -4,7 +4,9 @@
 
 #include <linux/ioport.h>
 
-#ifdef CONFIG_SUPERH
+#if defined(CONFIG_SH_FXCG)
+#define INTC_NR_IRQS	128	/* the SH7305's INTEVT codes are below 0x1000 */
+#elif defined(CONFIG_SUPERH)
 #define INTC_NR_IRQS	512
 #else
 #define INTC_NR_IRQS	1024
