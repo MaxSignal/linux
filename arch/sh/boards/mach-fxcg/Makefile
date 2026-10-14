@@ -4,4 +4,7 @@
 #
 obj-y	:= setup.o console.o sound.o
 obj-$(CONFIG_FXCG_STORAGE)	+= storage.o
-obj-$(CONFIG_FXCG_ROM_INSTALL)	+= nor.o xipflash.o
+obj-$(CONFIG_FXCG_ROM_INSTALL)	+= xipflash.o
+ifneq ($(CONFIG_FXCG_STORAGE)$(CONFIG_FXCG_ROM_INSTALL),)
+obj-y	+= nor.o
+endif

@@ -7,16 +7,16 @@
  * and the word for a program, 0x80, the unlock cycles again and 0x30 at
  * the sector for a sector erase (128 KiB); the embedded algorithm is done
  * when DQ6 stops toggling. While it runs, the whole flash reads as
- * status, so nothing may read the flash meanwhile: callers hold
- * fxcg_flash_lock, which readers of the flash take too. The kernel must
- * not run in place from the flash.
+ * status, so nothing may read it meanwhile: callers hold fxcg_flash_lock,
+ * which readers of the flash take too, and each program or erase runs
+ * with interrupts off in code that waits without calling anything, as
+ * part of the kernel may run from the flash (this file stays in RAM).
  *
  * Every call names the range it is allowed to touch and is refused
  * outside it.
  */
-#include <linux/delay.h>
 #include <linux/io.h>
-#include <linux/jiffies.h>
+#include <linux/irqflags.h>
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/string.h>
@@ -27,19 +27,28 @@
 #define FLASH		0x80000000UL	/* P1: cached view of the NOR flash */
 #define FLASH_UC	0xa0000000UL	/* P2: uncached, for the commands */
 
-static void nor_unlock(void)
+/*
+ * Polls of DQ6 (two reads each, under a microsecond) before giving up: a
+ * word takes some 10 us to program, a sector about a second to erase.
+ */
+#define POLLS_PROGRAM	200000
+#define POLLS_ERASE	50000000
+
+static __always_inline void nor_unlock(void)
 {
 	__raw_writew(0xaa, FLASH_UC + 0xaaa);
 	__raw_writew(0x55, FLASH_UC + 0x554);
 }
 
-/* Wait until the program or erase algorithm at off stops toggling DQ6. */
-static int nor_wait(unsigned long off, unsigned long timeout)
+/*
+ * Wait until the program or erase algorithm at off stops toggling DQ6.
+ * Interrupts are off: no jiffies, no calls.
+ */
+static __always_inline int nor_wait(unsigned long off, unsigned long polls)
 {
-	unsigned long end = jiffies + timeout;
 	u16 a, b;
 
-	for (;;) {
+	while (polls--) {
 		a = __raw_readw(FLASH_UC + off);
 		b = __raw_readw(FLASH_UC + off);
 		if (!((a ^ b) & 0x40))
@@ -51,10 +60,6 @@ static int nor_wait(unsigned long off, unsigned long timeout)
 				return 0;
 			break;
 		}
-		if (time_after(jiffies, end))
-			break;
-		if (timeout > HZ)
-			msleep(1);
 	}
 	__raw_writew(0xf0, FLASH_UC);	/* reset: back to the array */
 	return -EIO;
@@ -76,7 +81,7 @@ bool fxcg_nor_blank(unsigned long off, unsigned long len)
 int fxcg_nor_program(unsigned long off, const void *src, unsigned long len,
 		     unsigned long lo, unsigned long hi)
 {
-	unsigned long i;
+	unsigned long i, flags;
 	int ret = 0;
 
 	lockdep_assert_held(&fxcg_flash_lock);
@@ -91,10 +96,12 @@ int fxcg_nor_program(unsigned long off, const void *src, unsigned long len,
 			ret = -EIO;	/* would need a 0 -> 1 */
 			break;
 		}
+		local_irq_save(flags);
 		nor_unlock();
 		__raw_writew(0xa0, FLASH_UC + 0xaaa);
 		__raw_writew(w, FLASH_UC + off + i);
-		ret = nor_wait(off + i, HZ / 10 + 1);
+		ret = nor_wait(off + i, POLLS_PROGRAM);
+		local_irq_restore(flags);
 		if (!ret && __raw_readw(FLASH_UC + off + i) != w)
 			ret = -EIO;
 	}
@@ -107,17 +114,20 @@ int fxcg_nor_program(unsigned long off, const void *src, unsigned long len,
 /* Erase the 128 KiB sector at off within [lo, hi). */
 int fxcg_nor_erase(unsigned long off, unsigned long lo, unsigned long hi)
 {
+	unsigned long flags;
 	int ret;
 
 	lockdep_assert_held(&fxcg_flash_lock);
 	if (WARN_ON(!nor_allowed(off, FXCG_FLASH_SECTOR, lo, hi) ||
 		    off % FXCG_FLASH_SECTOR))
 		return -EINVAL;
+	local_irq_save(flags);
 	nor_unlock();
 	__raw_writew(0x80, FLASH_UC + 0xaaa);
 	nor_unlock();
 	__raw_writew(0x30, FLASH_UC + off);
-	ret = nor_wait(off, 10 * HZ);
+	ret = nor_wait(off, POLLS_ERASE);
+	local_irq_restore(flags);
 	__flush_invalidate_region((void *)(FLASH + off), FXCG_FLASH_SECTOR);
 	if (!ret && !fxcg_nor_blank(off, FXCG_FLASH_SECTOR))
 		ret = -EIO;
