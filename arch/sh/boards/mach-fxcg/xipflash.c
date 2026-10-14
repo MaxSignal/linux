@@ -310,7 +310,7 @@ static const struct file_operations xip_fops = {
 };
 
 static struct miscdevice xip_dev = {
-	.minor		= MISC_DYNAMIC_MINOR,
+	.minor		= 240,	/* local/experimental: /dev/xipflash is a static node */
 	.name		= "xipflash",
 	.fops		= &xip_fops,
 	.mode		= 0200,

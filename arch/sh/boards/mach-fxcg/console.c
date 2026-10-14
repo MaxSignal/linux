@@ -891,7 +891,7 @@ static int __init fxcg_tty_init(void)
 
 	drv->driver_name = "fxcg";
 	drv->name = "ttyFX";
-	drv->major = 0;
+	drv->major = 254;		/* local/experimental: /dev/ttyFX0 is a static node */
 	drv->type = TTY_DRIVER_TYPE_CONSOLE;
 	drv->init_termios = tty_std_termios;
 	drv->init_termios.c_oflag = OPOST | ONLCR;

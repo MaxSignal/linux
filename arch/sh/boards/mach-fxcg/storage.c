@@ -27,6 +27,7 @@
 #include <linux/ctype.h>
 #include <linux/fs.h>
 #include <linux/fs_context.h>
+#include <linux/gfp.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/minmax.h>
@@ -87,7 +88,8 @@ static int build_page_map(void)
 {
 	unsigned int sec, slot, pages = 0;
 
-	page_map = kmalloc_array(MAX_PAGES, sizeof(*page_map), GFP_KERNEL);
+	/* 8.5 KiB: kmalloc would take 16 */
+	page_map = alloc_pages_exact(MAX_PAGES * sizeof(*page_map), GFP_KERNEL);
 	if (!page_map)
 		return -ENOMEM;
 	memset(page_map, 0xff, MAX_PAGES * sizeof(*page_map));
@@ -573,7 +575,7 @@ static int fls_fill_super(struct super_block *sb, struct fs_context *fc)
 		if (!ret)
 			ret = fls_read_volume();
 		if (ret) {
-			kfree(page_map);
+			free_pages_exact(page_map, MAX_PAGES * sizeof(*page_map));
 			page_map = NULL;
 		}
 		mutex_unlock(&fxcg_flash_lock);
