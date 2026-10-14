@@ -210,7 +210,8 @@ config USB_G_NCMDEV
 	help
 	  A CDC NCM network adapter for the host whose transfer blocks
 	  are read and written through /dev/ncm, by a network stack in
-	  user space. Needs no networking in the kernel.
+	  user space. Needs no networking in the kernel. Meant to be the
+	  only gadget: libcomposite is then built without configfs.
 
 	  Say "y" to link the driver statically, or "m" to build a
 	  dynamically linked module called "g_ncmdev".
