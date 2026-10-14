@@ -548,6 +548,29 @@ static int fls_flush(void)
 	return ret;
 }
 
+static int fls_rw_init(void)
+{
+	int i;
+
+	if (bufs[0].data)
+		return 0;
+	ftl.gc_buf = kmalloc(SLOT_SIZE, GFP_KERNEL);
+	for (i = 0; i < NR_BUFS && ftl.gc_buf; i++) {
+		bufs[i].data = kmalloc(SLOT_SIZE, GFP_KERNEL);
+		bufs[i].page = UNMAPPED;
+		if (!bufs[i].data)
+			break;
+	}
+	if (i == NR_BUFS)
+		return 0;
+	while (i--)
+		kfree(bufs[i].data);
+	memset(bufs, 0, sizeof(bufs));
+	kfree(ftl.gc_buf);
+	ftl.gc_buf = NULL;
+	return -ENOMEM;
+}
+
 /* A buffer holding disk sector n, to change it. */
 static u8 *buf_sector(u32 n)
 {
@@ -557,8 +580,11 @@ static u8 *buf_sector(u32 n)
 	int i, ret;
 
 	/* sector 0 (the MBR) is fls_bmap()'s "past the end": never write it */
-	if (!n || page >= MAX_PAGES || !bufs[0].data)
+	if (!n || page >= MAX_PAGES)
 		return ERR_PTR(-EIO);
+	ret = fls_rw_init();	/* the buffers, at the first write */
+	if (ret)
+		return ERR_PTR(ret);
 	for (i = 0; i < NR_BUFS; i++) {
 		if (bufs[i].page == page) {
 			b = &bufs[i];
@@ -605,28 +631,6 @@ static int fill_disk(u32 n, int c)
 }
 
 /* Get ready to write: the buffers. */
-static int fls_rw_init(void)
-{
-	int i;
-
-	if (bufs[0].data)
-		return 0;
-	ftl.gc_buf = kmalloc(SLOT_SIZE, GFP_KERNEL);
-	for (i = 0; i < NR_BUFS && ftl.gc_buf; i++) {
-		bufs[i].data = kmalloc(SLOT_SIZE, GFP_KERNEL);
-		bufs[i].page = UNMAPPED;
-		if (!bufs[i].data)
-			break;
-	}
-	if (i == NR_BUFS)
-		return 0;
-	while (i--)
-		kfree(bufs[i].data);
-	memset(bufs, 0, sizeof(bufs));
-	kfree(ftl.gc_buf);
-	ftl.gc_buf = NULL;
-	return -ENOMEM;
-}
 
 /* ------------------------------------------------------------ FAT16 */
 
@@ -1816,11 +1820,6 @@ static int fls_fill_super(struct super_block *sb, struct fs_context *fc)
 		if (ret)
 			return ret;
 	}
-	if (!(sb->s_flags & SB_RDONLY)) {
-		ret = fls_rw_init();
-		if (ret)
-			return ret;
-	}
 	sb->s_flags |= SB_NOATIME;
 	sb->s_magic = FLS_MAGIC;
 	sb->s_op = &fls_sops;
@@ -1845,7 +1844,7 @@ static int fls_get_tree(struct fs_context *fc)
 static int fls_reconfigure(struct fs_context *fc)
 {
 	sync_filesystem(fc->root->d_sb);
-	return fc->sb_flags & SB_RDONLY ? 0 : fls_rw_init();
+	return 0;
 }
 
 /* no options of its own: the others (relatime...) are ignored, as ramfs does */
