@@ -110,7 +110,9 @@ enum wq_internal_consts {
 	BUSY_WORKER_HASH_ORDER	= 6,		/* 64 pointers */
 
 	MAX_IDLE_WORKERS_RATIO	= 4,		/* 1/4 of busy can be idle */
-	IDLE_WORKER_TIMEOUT	= 300 * HZ,	/* keep idle ones for 5 mins */
+	/* keep idle ones for 5 mins, at least 2 of them (1 and 30 s if small) */
+	IDLE_WORKER_TIMEOUT	= (IS_ENABLED(CONFIG_BASE_SMALL) ? 30 : 300) * HZ,
+	MIN_IDLE_WORKERS	= IS_ENABLED(CONFIG_BASE_SMALL) ? 1 : 2,
 
 	MAYDAY_INITIAL_TIMEOUT  = HZ / 100 >= 2 ? HZ / 100 : 2,
 						/* call for help after 10ms
@@ -977,7 +979,8 @@ static bool too_many_workers(struct worker_pool *pool)
 	int nr_idle = pool->nr_idle + managing; /* manager is considered idle */
 	int nr_busy = pool->nr_workers - nr_idle;
 
-	return nr_idle > 2 && (nr_idle - 2) * MAX_IDLE_WORKERS_RATIO >= nr_busy;
+	return nr_idle > MIN_IDLE_WORKERS &&
+	       (nr_idle - MIN_IDLE_WORKERS) * MAX_IDLE_WORKERS_RATIO >= nr_busy;
 }
 
 /**
@@ -5700,7 +5703,11 @@ static int init_rescuer(struct workqueue_struct *wq)
 
 	lockdep_assert_held(&wq_pool_mutex);
 
-	if (!(wq->flags & WQ_MEM_RECLAIM))
+	/*
+	 * BASE_SMALL: no rescuers. Each is a kthread, and on the smallest
+	 * systems their stacks are a good part of the RAM.
+	 */
+	if (!(wq->flags & WQ_MEM_RECLAIM) || IS_ENABLED(CONFIG_BASE_SMALL))
 		return 0;
 
 	rescuer = alloc_worker(NUMA_NO_NODE);
