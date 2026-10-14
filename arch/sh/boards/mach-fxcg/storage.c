@@ -4,9 +4,7 @@
  *
  * The Casio OS keeps its storage memory (\\fls0, the FAT16 disk that the
  * calculator also offers over USB) in the NOR flash behind its own flash
- * translation layer. What this driver relies on was worked out from flash
- * dumps of an fx-CG20 with OS 02.02 and checked against the disk read
- * over USB:
+ * translation layer:
  *
  *  - the storage area is made of 128 KiB flash sectors, each with a 4 KiB
  *    header, 30 slots of 4 KiB from offset 0x1000 and 64 records of 64

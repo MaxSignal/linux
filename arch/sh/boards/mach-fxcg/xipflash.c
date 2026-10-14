@@ -6,9 +6,8 @@
  *	cat /mnt/fls/flash.bin > /dev/xipflash	install (or update)
  *	echo -n fxcgRMV1 > /dev/xipflash	remove: erase it all
  *
- * The flash part goes to the two erased areas that the Casio OS neither
- * checks at boot nor uses for its storage memory, 0xc00000-0xc7ffff and
- * 0xb20000-0xb3ffff. flash.bin (fxcg20-Linux-bundle scripts/romkernel.py)
+ * The flash part goes to 0xc00000-0xc7ffff and 0xb20000-0xb3ffff.
+ * flash.bin (fxcg20-Linux-bundle scripts/romkernel.py)
  * is a 64-byte index ("fxcgROMI", the count, the address and length of
  * each area's image, CRC-32) and the images; each image starts with a
  * 64-byte header ("fxcgROM1", address, length, the CRC-32 of the rest,
